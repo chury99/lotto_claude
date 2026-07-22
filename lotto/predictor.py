@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Callable
 
@@ -24,10 +25,22 @@ NUMBERS = np.arange(1, 46)
 Strategy = Callable[[pd.DataFrame], pd.Series]
 _REGISTRY: dict[str, Strategy] = {}
 
+# 조합 단위 점수: 전략 이름 -> (df -> (조합 -> 0~1 채택 확률))
+# 번호별 가중치로 표현할 수 없는, 조합 전체의 성질(합계 분포 등)을 다루는 전략용.
+ComboScorer = Callable[[list[int]], float]
+_COMBO_REGISTRY: dict[str, Callable[[pd.DataFrame], ComboScorer]] = {}
+
 
 def register(name: str) -> Callable[[Strategy], Strategy]:
     def deco(fn: Strategy) -> Strategy:
         _REGISTRY[name] = fn
+        return fn
+    return deco
+
+
+def register_combo(name: str) -> Callable:
+    def deco(fn: Callable[[pd.DataFrame], ComboScorer]) -> Callable:
+        _COMBO_REGISTRY[name] = fn
         return fn
     return deco
 
@@ -98,6 +111,41 @@ def balanced_scores(df: pd.DataFrame) -> pd.Series:
     return _normalize(total)
 
 
+# --------------------------------------------------- CLT(중심극한정리) 전략
+#
+# 1~45 모집단의 평균 μ=23, 분산 σ²=(45²-1)/12 ≈ 168.67.
+# 비복원 추출 6개 합계의 이론 분포는
+#   평균  = 6μ = 138
+#   분산  = 6σ² · (N-n)/(N-1) = 6·168.67·(39/44) ≈ 897   (표준편차 ≈ 29.9)
+# 이고, 중심극한정리에 따라 근사적으로 정규분포를 따른다.
+#
+# 개별 번호는 모두 균등하게 두되(가정상 특정 번호에 우열이 없음), 조합의 합계가
+# 이론 평균 138에 가까울수록 채택 확률을 높이는 기각 샘플링으로 구현한다.
+# 결과적으로 추천 조합의 합계 분포가 위 정규분포를 따라가게 된다.
+
+CLT_SUM_MEAN = 6 * (1 + 45) / 2  # 138.0
+CLT_SUM_VAR = 6 * ((45**2 - 1) / 12) * ((45 - 6) / (45 - 1))  # ≈ 897.0
+CLT_SUM_STD = math.sqrt(CLT_SUM_VAR)
+
+
+@register("clt")
+def clt_scores(df: pd.DataFrame) -> pd.Series:
+    """번호별로는 균등 — CLT 전략의 핵심은 조합 점수(clt_combo_scorer)에 있다."""
+    return pd.Series(1.0, index=NUMBERS)
+
+
+@register_combo("clt")
+def clt_combo_scorer(df: pd.DataFrame) -> ComboScorer:
+    """합계가 이론 평균 138에 가까울수록 1에 가까운 채택 확률을 준다.
+
+    정규 밀도를 최댓값(합계=138)으로 나눠 0~1로 정규화한 값이라, 기각 샘플링의
+    채택 확률로 그대로 쓸 수 있다.
+    """
+    def score(combo: list[int]) -> float:
+        return math.exp(-((sum(combo) - CLT_SUM_MEAN) ** 2) / (2 * CLT_SUM_VAR))
+    return score
+
+
 # ---------------------------------------------------------------- 조합 필터
 
 @dataclass
@@ -147,20 +195,48 @@ def draw_combination(
     weights: pd.Series,
     rng: np.random.Generator,
     combo_filter: CombinationFilter | None = None,
+    combo_scorer: ComboScorer | None = None,
     max_attempts: int = 500,
 ) -> list[int]:
     """가중치에 따라 번호 6개를 비복원 추출한다.
 
-    필터를 통과하는 조합을 max_attempts까지 시도하고, 실패하면 마지막 조합을
-    그대로 돌려준다(필터가 지나치게 빡빡한 경우 무한 루프 방지).
+    combo_scorer가 있으면 그 값(0~1)을 채택 확률로 쓰는 기각 샘플링을 한다.
+    필터/기각을 통과하는 조합을 max_attempts까지 시도하고, 실패하면 마지막
+    조합을 그대로 돌려준다(조건이 지나치게 빡빡한 경우 무한 루프 방지).
     """
     p = _normalize(weights).to_numpy()
     combo: list[int] = []
     for _ in range(max_attempts):
         combo = sorted(int(n) for n in rng.choice(NUMBERS, size=6, replace=False, p=p))
-        if combo_filter is None or combo_filter.accepts(combo):
-            return combo
+        if combo_filter is not None and not combo_filter.accepts(combo):
+            continue
+        if combo_scorer is not None and rng.random() >= combo_scorer(combo):
+            continue
+        return combo
     return combo
+
+
+def build_sampler(
+    df: pd.DataFrame,
+    strategy: str = "balanced",
+    use_filter: bool = True,
+) -> Callable[[np.random.Generator], list[int]]:
+    """전략 이름으로 '조합 1개를 뽑는 함수'를 만든다. predict와 backtest가 공유한다."""
+    if strategy not in _REGISTRY:
+        raise ValueError(
+            f"알 수 없는 전략: {strategy!r} (사용 가능: {', '.join(available_strategies())})"
+        )
+    if df.empty:
+        raise ValueError("분석할 데이터가 없습니다. 먼저 `python main.py update`를 실행하세요.")
+
+    weights = _REGISTRY[strategy](df)
+    combo_filter = CombinationFilter.from_history(df) if use_filter else None
+    combo_scorer = _COMBO_REGISTRY[strategy](df) if strategy in _COMBO_REGISTRY else None
+
+    def sample(rng: np.random.Generator) -> list[int]:
+        return draw_combination(weights, rng, combo_filter, combo_scorer)
+
+    return sample
 
 
 def predict(
@@ -171,21 +247,13 @@ def predict(
     use_filter: bool = True,
 ) -> list[list[int]]:
     """다음 회차 추천 번호를 games개 만든다 (조합 중복 없음)."""
-    if strategy not in _REGISTRY:
-        raise ValueError(
-            f"알 수 없는 전략: {strategy!r} (사용 가능: {', '.join(available_strategies())})"
-        )
-    if df.empty:
-        raise ValueError("분석할 데이터가 없습니다. 먼저 `python main.py update`를 실행하세요.")
-
-    weights = _REGISTRY[strategy](df)
-    combo_filter = CombinationFilter.from_history(df) if use_filter else None
+    sample = build_sampler(df, strategy, use_filter)
     rng = np.random.default_rng(seed)
 
     picks: list[list[int]] = []
     seen: set[tuple[int, ...]] = set()
     while len(picks) < games:
-        combo = draw_combination(weights, rng, combo_filter)
+        combo = sample(rng)
         key = tuple(combo)
         if key in seen:
             continue

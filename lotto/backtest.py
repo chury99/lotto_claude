@@ -73,10 +73,9 @@ def run(
         history = df.iloc[:i]  # i회차 시점에서는 그 이전 데이터만 사용 가능
         actual = set(df.iloc[i][NUMBER_COLUMNS].astype(int).tolist())
 
-        weights = predictor._REGISTRY[strategy](history)
-        combo_filter = predictor.CombinationFilter.from_history(history)
+        sample = predictor.build_sampler(history, strategy)
         for _ in range(games_per_draw):
-            combo = predictor.draw_combination(weights, rng, combo_filter)
+            combo = sample(rng)
             hits = len(actual & set(combo))
             match_counts[hits] += 1
             all_matches.append(hits)

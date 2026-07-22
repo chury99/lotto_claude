@@ -142,6 +142,47 @@ def test_filtered_predictions_pass_filter(df):
         assert combo_filter.accepts(combo)
 
 
+def test_clt_theoretical_constants():
+    """이론값 검증: 합계 평균 138, 분산 = 6σ²(N-n)/(N-1) ≈ 897."""
+    assert predictor.CLT_SUM_MEAN == 138.0
+    assert predictor.CLT_SUM_VAR == pytest.approx(6 * (45**2 - 1) / 12 * 39 / 44)
+    assert predictor.CLT_SUM_STD == pytest.approx(29.95, abs=0.01)
+
+
+def test_clt_scorer_peaks_at_mean(df):
+    score = predictor.clt_combo_scorer(df)
+    center = [18, 20, 22, 24, 26, 28]      # 합계 138
+    extreme = [1, 2, 3, 4, 5, 6]           # 합계 21
+    assert score(center) == pytest.approx(1.0)
+    assert score(extreme) < 0.001
+    assert 0.0 < score([1, 5, 10, 20, 30, 40]) < 1.0
+
+
+def test_clt_sums_concentrate_near_mean(df):
+    """CLT 전략의 합계 분포가 균등 추출보다 138 주변에 집중되는지 확인한다.
+
+    필터를 꺼서 순수한 기각 샘플링 효과만 본다.
+    """
+    clt_sums = [sum(c) for c in predictor.predict(
+        df, strategy="clt", games=300, seed=11, use_filter=False)]
+    uni_sums = [sum(c) for c in predictor.predict(
+        df, strategy="uniform", games=300, seed=11, use_filter=False)]
+
+    assert np.mean(np.abs(np.array(clt_sums) - 138)) < np.mean(np.abs(np.array(uni_sums) - 138))
+    assert np.std(clt_sums) < np.std(uni_sums)
+    # 채택 확률이 정규 밀도이므로 표본 표준편차는 이론값(≈30)보다 크게 작아야 한다
+    assert np.std(clt_sums) < predictor.CLT_SUM_STD
+
+
+def test_draw_combination_scorer_rejects(df):
+    """조합 점수 0이면 절대 채택되지 않고 max_attempts 후 마지막 조합을 돌려준다."""
+    rng = np.random.default_rng(0)
+    weights = pd.Series(1.0, index=range(1, 46))
+    combo = predictor.draw_combination(
+        weights, rng, combo_scorer=lambda c: 0.0, max_attempts=50)
+    assert len(combo) == 6  # 무한 루프 없이 반환
+
+
 def test_backtest_runs(df):
     result = backtest.run(df, strategy="hot", test_draws=20, games_per_draw=3, min_history=100)
     assert result.draws_tested == 20
