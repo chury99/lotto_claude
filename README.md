@@ -220,12 +220,22 @@ pairwise가 학습하는 "함께 나온 빈도"는 전부 표본 잡음입니다
 
 ### 2. 설정 파일 만들기
 
+도우미 스크립트가 토큰을 확인하고 `chat_id`를 자동으로 찾아 저장합니다:
+
 ```bash
-cp config/telegram.json.example config/telegram.json
-chmod 600 config/telegram.json    # 본인만 읽도록 (권장)
+python setup_telegram.py --token '123456:ABC-DEF...'
 ```
 
-`config/telegram.json` 을 열어 값을 채웁니다:
+`chat_id`는 봇이 받은 메시지에서 얻으므로, **봇에게 아무 메시지나 한 번 보낸 뒤**
+실행해야 합니다(텔레그램은 봇이 먼저 대화를 시작할 수 없습니다). 아직 안 보냈다면
+스크립트가 안내를 출력하니, 메시지를 보내고 `python setup_telegram.py` 를 다시
+실행하면 됩니다.
+
+```bash
+python setup_telegram.py --check   # 저장된 설정으로 연결 확인
+```
+
+직접 만들어도 됩니다 — `config/telegram.json.example` 을 복사해 값을 채우세요:
 
 ```json
 {
@@ -285,7 +295,7 @@ pip install pytest
 python -m pytest tests -q
 ```
 
-파싱·분석·예측 로직을 네트워크 없이 고정 데이터로 검증합니다 (120개 테스트).
+파싱·분석·예측 로직을 네트워크 없이 고정 데이터로 검증합니다 (128개 테스트).
 LSTM 테스트는 torch가 설치된 환경에서만 실행되고, 없으면 자동으로 건너뜁니다.
 
 ## 프로젝트 구조
@@ -293,6 +303,7 @@ LSTM 테스트는 torch가 설치된 환경에서만 실행되고, 없으면 자
 ```
 lotto_claude/
 ├── run.py               # 전 과정 자동 실행 런처
+├── setup_telegram.py    # 텔레그램 설정 도우미
 ├── main.py              # CLI 진입점
 ├── config/              # telegram.json (자격증명, git 미포함)
 ├── lotto/

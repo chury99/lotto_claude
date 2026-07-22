@@ -216,3 +216,65 @@ def test_send_picks_end_to_end(monkeypatch, config_file):
 
     assert "1234회 추천 번호" in captured["text"]
     assert "07 14 17 20 42 45" in captured["text"]
+
+
+# ------------------------------------------------------------------ 설정 도우미
+
+def test_get_me_success(monkeypatch):
+    monkeypatch.setattr(requests, "get", lambda *a, **k: FakeResponse(
+        {"ok": True, "result": {"first_name": "로또봇", "username": "lotto_bot"}}))
+    assert notify.get_me("tok")["username"] == "lotto_bot"
+
+
+def test_get_me_invalid_token(monkeypatch):
+    monkeypatch.setattr(requests, "get", lambda *a, **k: FakeResponse(
+        {"ok": False, "description": "Unauthorized"}, status_code=401))
+    with pytest.raises(notify.NotifyError, match="유효하지 않습니다"):
+        notify.get_me("bad")
+
+
+def test_detect_chat_ids_finds_private_chat(monkeypatch):
+    monkeypatch.setattr(requests, "get", lambda *a, **k: FakeResponse({
+        "ok": True,
+        "result": [{"message": {"chat": {
+            "id": 12345, "type": "private", "first_name": "길동", "last_name": "홍",
+        }}}],
+    }))
+    assert notify.detect_chat_ids("tok") == {"12345": "길동 홍"}
+
+
+def test_detect_chat_ids_group_uses_title(monkeypatch):
+    monkeypatch.setattr(requests, "get", lambda *a, **k: FakeResponse({
+        "ok": True,
+        "result": [{"message": {"chat": {"id": -100, "type": "group", "title": "로또방"}}}],
+    }))
+    assert notify.detect_chat_ids("tok") == {"-100": "로또방"}
+
+
+def test_detect_chat_ids_empty(monkeypatch):
+    monkeypatch.setattr(requests, "get", lambda *a, **k: FakeResponse(
+        {"ok": True, "result": []}))
+    assert notify.detect_chat_ids("tok") == {}
+
+
+def test_detect_chat_ids_dedupes(monkeypatch):
+    """같은 사람이 여러 번 보내도 하나로 모은다."""
+    monkeypatch.setattr(requests, "get", lambda *a, **k: FakeResponse({
+        "ok": True,
+        "result": [
+            {"message": {"chat": {"id": 7, "type": "private", "first_name": "A"}}},
+            {"message": {"chat": {"id": 7, "type": "private", "first_name": "A"}}},
+        ],
+    }))
+    assert notify.detect_chat_ids("tok") == {"7": "A"}
+
+
+def test_save_credentials_writes_and_chmods(tmp_path):
+    path = notify.save_credentials("tok", 42, tmp_path / "sub" / "telegram.json")
+    assert notify.load_credentials(path) == ("tok", "42")
+    assert path.stat().st_mode & 0o077 == 0  # 본인만 읽기/쓰기
+
+
+def test_save_credentials_roundtrip_unicode(tmp_path):
+    path = notify.save_credentials("토큰", "42", tmp_path / "t.json")
+    assert json.loads(path.read_text(encoding="utf-8"))[notify.TOKEN_KEY] == "토큰"

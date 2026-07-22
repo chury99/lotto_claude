@@ -141,6 +141,66 @@ def format_message(
     return "\n".join(lines)
 
 
+def get_me(token: str, timeout: float = DEFAULT_TIMEOUT) -> dict:
+    """봇 정보를 조회한다. 토큰이 유효한지 확인하는 용도."""
+    try:
+        resp = requests.get(f"{API_BASE}/bot{token}/getMe", timeout=timeout)
+        body = resp.json()
+    except (requests.RequestException, ValueError) as exc:
+        raise NotifyError(f"봇 정보를 조회하지 못했습니다: {exc}") from exc
+    if not body.get("ok"):
+        raise NotifyError(f"토큰이 유효하지 않습니다: {body.get('description', '알 수 없는 오류')}")
+    return body.get("result", {})
+
+
+def detect_chat_ids(token: str, timeout: float = DEFAULT_TIMEOUT) -> dict[str, str]:
+    """봇이 받은 메시지에서 chat_id를 찾는다.
+
+    {chat_id: 표시이름} 형태로 돌려준다. 봇에게 아직 아무도 말을 걸지 않았으면
+    빈 딕셔너리다(텔레그램은 봇이 먼저 대화를 시작할 수 없다).
+    """
+    try:
+        resp = requests.get(f"{API_BASE}/bot{token}/getUpdates", timeout=timeout)
+        body = resp.json()
+    except (requests.RequestException, ValueError) as exc:
+        raise NotifyError(f"업데이트를 조회하지 못했습니다: {exc}") from exc
+    if not body.get("ok"):
+        raise NotifyError(f"업데이트 조회 실패: {body.get('description', '알 수 없는 오류')}")
+
+    found: dict[str, str] = {}
+    for update in body.get("result", []):
+        message = update.get("message") or update.get("channel_post") or {}
+        chat = message.get("chat") or {}
+        chat_id = chat.get("id")
+        if chat_id is None:
+            continue
+        label = (
+            chat.get("title")
+            or " ".join(filter(None, [chat.get("first_name"), chat.get("last_name")]))
+            or chat.get("username")
+            or chat.get("type", "")
+        )
+        found[str(chat_id)] = label
+    return found
+
+
+def save_credentials(
+    token: str,
+    chat_id: str,
+    path: Path | str = DEFAULT_CONFIG_PATH,
+) -> Path:
+    """설정 파일에 자격증명을 쓰고 본인만 읽도록 권한을 조인다."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({TOKEN_KEY: token, CHAT_ID_KEY: str(chat_id)},
+                   indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    path.chmod(0o600)
+    return path
+
+
 class TelegramNotifier:
     """텔레그램 Bot API로 메시지를 보낸다."""
 
