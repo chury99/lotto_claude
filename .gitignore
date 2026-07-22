@@ -17,3 +17,6 @@ venv/
 data/*.csv
 data/*.html
 !data/.gitkeep
+
+# 런처 실행 로그
+*.log

@@ -19,6 +19,22 @@ pip install -r requirements.txt
 
 ## 사용법
 
+### 한 번에 실행 (권장)
+
+수집부터 텔레그램 발송까지 전 과정을 실행합니다:
+
+```bash
+python run.py                    # 수집 → 분석 → 조합 생성 → 발송
+python run.py -n 5 -s unpopular  # 게임 수·전략 지정
+python run.py --no-telegram      # 발송 없이 화면 출력만
+python run.py --skip-update      # 크롤링 없이 기존 데이터 사용
+```
+
+크롤링에 실패해도 기존 CSV가 있으면 그것으로 계속 진행하고, 텔레그램이 설정돼 있지
+않으면 발송 단계만 건너뜁니다. 발송 실패 시에는 종료 코드 1을 반환합니다.
+
+### 개별 명령
+
 ```bash
 python main.py update              # 당첨번호 수집 (없는 회차만 증분 수집)
 python main.py stats               # 통계 요약
@@ -216,8 +232,11 @@ python main.py predict -s unpopular -n 5 --telegram
 
 ```bash
 # 매주 토요일 오후 6시 (crontab -e)
-0 18 * * 6 cd /path/to/lotto_claude && .venv/bin/python main.py update && .venv/bin/python main.py predict -s unpopular -n 5 --telegram
+0 18 * * 6 cd /path/to/lotto_claude && .venv/bin/python run.py >> run.log 2>&1
 ```
+
+cron에는 환경변수가 상속되지 않으므로, crontab 상단에 직접 넣거나 래퍼 스크립트에서
+`export` 하세요.
 
 ## 검증 결과
 
@@ -254,13 +273,14 @@ pip install pytest
 python -m pytest tests -q
 ```
 
-파싱·분석·예측 로직을 네트워크 없이 고정 데이터로 검증합니다 (93개 테스트).
+파싱·분석·예측 로직을 네트워크 없이 고정 데이터로 검증합니다 (108개 테스트).
 LSTM 테스트는 torch가 설치된 환경에서만 실행되고, 없으면 자동으로 건너뜁니다.
 
 ## 프로젝트 구조
 
 ```
 lotto_claude/
+├── run.py               # 전 과정 자동 실행 런처
 ├── main.py              # CLI 진입점
 ├── lotto/
 │   ├── crawler.py       # 동행복권 사이트 크롤링
