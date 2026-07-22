@@ -20,3 +20,8 @@ data/*.html
 
 # 런처 실행 로그
 *.log
+
+# 텔레그램 자격증명 (예시 파일만 커밋)
+config/telegram.json
+config/*.json
+!config/*.json.example

@@ -1,5 +1,7 @@
 """런처(run.py) 테스트. 네트워크·전송 없이 각 단계를 모의로 검증한다."""
 
+import json
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -33,10 +35,19 @@ def csv_path(df, tmp_path):
     return str(path)
 
 
-@pytest.fixture(autouse=True)
-def no_telegram_env(monkeypatch):
-    monkeypatch.delenv(notify.TOKEN_ENV, raising=False)
-    monkeypatch.delenv(notify.CHAT_ID_ENV, raising=False)
+@pytest.fixture
+def config_file(tmp_path):
+    path = tmp_path / "telegram.json"
+    path.write_text(json.dumps({
+        notify.TOKEN_KEY: "tok", notify.CHAT_ID_KEY: "42",
+    }), encoding="utf-8")
+    return path
+
+
+@pytest.fixture
+def no_config(tmp_path):
+    """존재하지 않는 설정 파일 경로."""
+    return str(tmp_path / "none.json")
 
 
 # --------------------------------------------------------------- 단계별 동작
@@ -100,42 +111,51 @@ def test_dispatch_disabled(capsys):
     assert "발송하지 않았습니다" in capsys.readouterr().out
 
 
-def test_dispatch_skips_without_credentials(capsys):
-    assert run.dispatch([[1, 2, 3, 4, 5, 6]], 1, "uniform", enabled=True) is False
-    assert "설정되지 않아 건너뜁니다" in capsys.readouterr().out
+def test_dispatch_skips_without_config_file(no_config, capsys):
+    """설정 파일이 없으면 안내만 하고 정상 진행(오류 아님)."""
+    assert run.dispatch([[1, 2, 3, 4, 5, 6]], 1, "uniform",
+                        enabled=True, config_path=no_config) is False
+    assert "설정 파일이 없습니다" in capsys.readouterr().out
 
 
-def test_dispatch_sends_with_credentials(monkeypatch, capsys):
-    monkeypatch.setenv(notify.TOKEN_ENV, "tok")
-    monkeypatch.setenv(notify.CHAT_ID_ENV, "42")
+def test_dispatch_sends_with_config_file(monkeypatch, config_file, capsys):
     sent = {}
 
     def fake_send_picks(picks, draw_no, strategy, note=None, **kw):
-        sent.update(picks=picks, draw_no=draw_no, strategy=strategy, note=note)
+        sent.update(picks=picks, draw_no=draw_no, strategy=strategy,
+                    note=note, config_path=kw.get("config_path"))
         return {"message_id": 1}
 
     monkeypatch.setattr(run.notify, "send_picks", fake_send_picks)
 
-    assert run.dispatch([[1, 2, 3, 4, 5, 6]], 1234, "unpopular", enabled=True) is True
+    assert run.dispatch([[1, 2, 3, 4, 5, 6]], 1234, "unpopular",
+                        enabled=True, config_path=str(config_file)) is True
     assert sent["draw_no"] == 1234
     assert "생성 시각" in sent["note"]
+    assert str(sent["config_path"]) == str(config_file)
     assert "발송 완료" in capsys.readouterr().out
 
 
-def test_dispatch_exits_on_send_failure(monkeypatch):
-    monkeypatch.setenv(notify.TOKEN_ENV, "tok")
-    monkeypatch.setenv(notify.CHAT_ID_ENV, "42")
-
+def test_dispatch_exits_on_send_failure(monkeypatch, config_file):
     def boom(*a, **k):
         raise notify.NotifyError("chat not found")
 
     monkeypatch.setattr(run.notify, "send_picks", boom)
     with pytest.raises(SystemExit) as exc:
-        run.dispatch([[1, 2, 3, 4, 5, 6]], 1, "uniform", enabled=True)
+        run.dispatch([[1, 2, 3, 4, 5, 6]], 1, "uniform",
+                     enabled=True, config_path=str(config_file))
     assert exc.value.code == 1
 
 
 # --------------------------------------------------------------- 전체 흐름
+
+def test_main_skips_send_when_no_config(csv_path, no_config, capsys):
+    """설정 파일이 없어도 전체 실행은 성공한다."""
+    code = run.main(["--csv", csv_path, "--skip-update", "-n", "2",
+                     "-s", "uniform", "--telegram-config", no_config])
+    assert code == 0
+    assert "설정 파일이 없습니다" in capsys.readouterr().out
+
 
 def test_main_end_to_end_without_telegram(csv_path, capsys):
     code = run.main(["--csv", csv_path, "--skip-update", "--no-telegram",
@@ -146,15 +166,14 @@ def test_main_end_to_end_without_telegram(csv_path, capsys):
     assert "301회 3게임 생성" in out
 
 
-def test_main_sends_when_configured(csv_path, monkeypatch, capsys):
-    monkeypatch.setenv(notify.TOKEN_ENV, "tok")
-    monkeypatch.setenv(notify.CHAT_ID_ENV, "42")
+def test_main_sends_when_configured(csv_path, config_file, monkeypatch, capsys):
     calls = []
     monkeypatch.setattr(run.notify, "send_picks",
                         lambda *a, **k: calls.append(a) or {"message_id": 1})
 
     code = run.main(["--csv", csv_path, "--skip-update", "-n", "2",
-                     "-s", "uniform", "--seed", "1"])
+                     "-s", "uniform", "--seed", "1",
+                     "--telegram-config", str(config_file)])
     assert code == 0
     assert len(calls) == 1
     assert "텔레그램 발송함" in capsys.readouterr().out

@@ -1,9 +1,14 @@
 """추천 번호를 텔레그램으로 보낸다.
 
-봇 토큰과 채팅 ID는 환경변수로만 읽는다. 코드나 저장소에 절대 넣지 말 것.
+봇 토큰과 채팅 ID는 설정 파일에서 읽는다(기본 `config/telegram.json`).
 
-    export TELEGRAM_BOT_TOKEN="123456:ABC-DEF..."
-    export TELEGRAM_CHAT_ID="123456789"
+    {
+      "bot_token": "123456:ABC-DEF...",
+      "chat_id": "123456789"
+    }
+
+이 파일은 .gitignore에 있어 커밋되지 않는다. `config/telegram.json.example`을
+복사해서 값을 채워 넣으면 된다.
 
 봇 만드는 법:
   1. 텔레그램에서 @BotFather 에게 /newbot — 토큰을 받는다.
@@ -14,22 +19,96 @@
 from __future__ import annotations
 
 import html
+import json
 import logging
-import os
+import stat
+from pathlib import Path
 
 import requests
 
 log = logging.getLogger(__name__)
 
 API_BASE = "https://api.telegram.org"
-TOKEN_ENV = "TELEGRAM_BOT_TOKEN"
-CHAT_ID_ENV = "TELEGRAM_CHAT_ID"
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config" / "telegram.json"
+EXAMPLE_CONFIG_PATH = PROJECT_ROOT / "config" / "telegram.json.example"
+
+TOKEN_KEY = "bot_token"
+CHAT_ID_KEY = "chat_id"
 
 DEFAULT_TIMEOUT = 15.0
 
 
 class NotifyError(RuntimeError):
     """전송 실패 또는 설정 누락."""
+
+
+def config_exists(path: Path | str = DEFAULT_CONFIG_PATH) -> bool:
+    """설정 파일이 있는지만 확인한다(내용은 읽지 않음)."""
+    return Path(path).is_file()
+
+
+def setup_hint(path: Path | str = DEFAULT_CONFIG_PATH) -> str:
+    """설정 방법 안내 문구."""
+    path = Path(path)
+    return (
+        f"텔레그램 설정 파일이 없습니다: {path}\n"
+        f"  1) cp {EXAMPLE_CONFIG_PATH} {path}\n"
+        f"  2) 파일을 열어 {TOKEN_KEY} / {CHAT_ID_KEY} 값을 채우세요\n"
+        f"  3) chmod 600 {path}   (권장 — 본인만 읽도록)"
+    )
+
+
+def load_credentials(path: Path | str = DEFAULT_CONFIG_PATH) -> tuple[str, str]:
+    """설정 파일에서 (토큰, 채팅 ID)를 읽는다."""
+    path = Path(path)
+    if not path.is_file():
+        raise NotifyError(setup_hint(path))
+
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise NotifyError(f"설정 파일을 읽지 못했습니다 ({path}): {exc}") from exc
+
+    try:
+        config = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise NotifyError(
+            f"설정 파일이 올바른 JSON이 아닙니다 ({path}): {exc.msg} (line {exc.lineno})"
+        ) from exc
+
+    if not isinstance(config, dict):
+        raise NotifyError(f"설정 파일의 최상위는 객체여야 합니다 ({path}).")
+
+    token = str(config.get(TOKEN_KEY, "") or "").strip()
+    chat_id = str(config.get(CHAT_ID_KEY, "") or "").strip()
+
+    missing = [k for k, v in ((TOKEN_KEY, token), (CHAT_ID_KEY, chat_id)) if not v]
+    if missing:
+        raise NotifyError(
+            f"설정 파일에 값이 비어 있습니다 ({path}): {', '.join(missing)}"
+        )
+    if token.startswith("여기에") or chat_id.startswith("여기에"):
+        raise NotifyError(
+            f"설정 파일이 예시 그대로입니다 ({path}). 실제 값으로 바꿔주세요."
+        )
+
+    _warn_if_world_readable(path)
+    return token, chat_id
+
+
+def _warn_if_world_readable(path: Path) -> None:
+    """자격증명 파일이 남에게도 읽히는 권한이면 경고한다."""
+    try:
+        mode = path.stat().st_mode
+    except OSError:
+        return
+    if mode & (stat.S_IRGRP | stat.S_IROTH):
+        log.warning(
+            "%s 파일을 다른 사용자도 읽을 수 있습니다. `chmod 600 %s` 를 권장합니다.",
+            path, path,
+        )
 
 
 def format_message(
@@ -70,21 +149,13 @@ class TelegramNotifier:
         token: str | None = None,
         chat_id: str | None = None,
         timeout: float = DEFAULT_TIMEOUT,
+        config_path: Path | str = DEFAULT_CONFIG_PATH,
     ) -> None:
-        self.token = token or os.environ.get(TOKEN_ENV, "")
-        self.chat_id = chat_id or os.environ.get(CHAT_ID_ENV, "")
+        if token and chat_id:
+            self.token, self.chat_id = token, chat_id
+        else:
+            self.token, self.chat_id = load_credentials(config_path)
         self.timeout = timeout
-
-        missing = [
-            name for name, value in ((TOKEN_ENV, self.token), (CHAT_ID_ENV, self.chat_id))
-            if not value
-        ]
-        if missing:
-            raise NotifyError(
-                f"환경변수가 설정되지 않았습니다: {', '.join(missing)}\n"
-                f"  export {TOKEN_ENV}='봇토큰'\n"
-                f"  export {CHAT_ID_ENV}='채팅ID'"
-            )
 
     def send(self, text: str) -> dict:
         """메시지를 보내고 API 응답(result)을 돌려준다."""

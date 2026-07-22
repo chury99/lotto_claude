@@ -76,8 +76,9 @@ def cmd_predict(args: argparse.Namespace) -> None:
 
     if args.telegram:
         from lotto import notify  # requests만 필요하지만 사용 시점에 임포트
+        kwargs = {"config_path": args.telegram_config} if args.telegram_config else {}
         try:
-            notify.send_picks(picks, next_draw, args.strategy)
+            notify.send_picks(picks, next_draw, args.strategy, **kwargs)
         except notify.NotifyError as exc:
             print(f"\n[텔레그램] 전송하지 못했습니다: {exc}", file=sys.stderr)
             raise SystemExit(1)
@@ -137,10 +138,10 @@ def cmd_backtest(args: argparse.Namespace) -> None:
         print(f"\n무작위 선택 시 평균 적중 기댓값: {6 * 6 / 45:.4f}개")
 
 
-def notify_env_hint() -> str:
-    """--telegram 도움말에 필요한 환경변수 이름을 안내한다."""
+def notify_config_hint() -> str:
+    """--telegram 도움말에 설정 파일 위치를 안내한다."""
     from lotto import notify
-    return f"{notify.TOKEN_ENV}, {notify.CHAT_ID_ENV} 필요"
+    return f"설정 파일 {notify.DEFAULT_CONFIG_PATH} 필요"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -173,7 +174,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_predict.add_argument("--show-scores", action="store_true", help="번호별 점수 표 출력")
     p_predict.add_argument("--telegram", action="store_true",
                            help=f"추천 번호를 텔레그램으로 전송 "
-                                f"({notify_env_hint()})")
+                                f"({notify_config_hint()})")
+    p_predict.add_argument("--telegram-config", metavar="PATH",
+                           help="텔레그램 설정 파일 경로 (기본 config/telegram.json)")
     p_predict.set_defaults(func=cmd_predict)
 
     p_combos = sub.add_parser("combos", help="2개/3개 번호 조합 출현 분석")

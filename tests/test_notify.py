@@ -1,5 +1,7 @@
 """텔레그램 전송 테스트. 실제 네트워크 호출 없이 모두 모의(mock)로 검증한다."""
 
+import json
+
 import pytest
 import requests
 
@@ -8,11 +10,15 @@ from lotto import notify
 PICKS = [[7, 14, 17, 20, 42, 45], [4, 10, 13, 32, 35, 40]]
 
 
-@pytest.fixture(autouse=True)
-def clean_env(monkeypatch):
-    """실제 환경변수가 테스트에 새어 들어오지 않게 한다."""
-    monkeypatch.delenv(notify.TOKEN_ENV, raising=False)
-    monkeypatch.delenv(notify.CHAT_ID_ENV, raising=False)
+@pytest.fixture
+def config_file(tmp_path):
+    """유효한 설정 파일을 만들어 경로를 돌려준다."""
+    path = tmp_path / "telegram.json"
+    path.write_text(json.dumps({
+        notify.TOKEN_KEY: "tok", notify.CHAT_ID_KEY: "42",
+    }), encoding="utf-8")
+    path.chmod(0o600)
+    return path
 
 
 class FakeResponse:
@@ -61,30 +67,90 @@ def test_format_message_with_note():
     assert "메모입니다" in msg
 
 
-# ------------------------------------------------------------------ 설정 검증
+# ------------------------------------------------------------------ 설정 파일
 
-def test_missing_env_raises():
-    with pytest.raises(notify.NotifyError, match=notify.TOKEN_ENV):
-        notify.TelegramNotifier()
-
-
-def test_missing_chat_id_only(monkeypatch):
-    monkeypatch.setenv(notify.TOKEN_ENV, "tok")
-    with pytest.raises(notify.NotifyError, match=notify.CHAT_ID_ENV):
-        notify.TelegramNotifier()
+def test_load_credentials(config_file):
+    assert notify.load_credentials(config_file) == ("tok", "42")
 
 
-def test_reads_env(monkeypatch):
-    monkeypatch.setenv(notify.TOKEN_ENV, "tok")
-    monkeypatch.setenv(notify.CHAT_ID_ENV, "42")
-    n = notify.TelegramNotifier()
+def test_missing_file_raises(tmp_path):
+    with pytest.raises(notify.NotifyError, match="설정 파일이 없습니다"):
+        notify.load_credentials(tmp_path / "none.json")
+
+
+def test_invalid_json_raises(tmp_path):
+    path = tmp_path / "bad.json"
+    path.write_text("{ not json", encoding="utf-8")
+    with pytest.raises(notify.NotifyError, match="올바른 JSON이 아닙니다"):
+        notify.load_credentials(path)
+
+
+def test_non_object_json_raises(tmp_path):
+    path = tmp_path / "arr.json"
+    path.write_text("[1, 2]", encoding="utf-8")
+    with pytest.raises(notify.NotifyError, match="객체여야"):
+        notify.load_credentials(path)
+
+
+@pytest.mark.parametrize("config,missing", [
+    ({notify.CHAT_ID_KEY: "42"}, notify.TOKEN_KEY),
+    ({notify.TOKEN_KEY: "tok"}, notify.CHAT_ID_KEY),
+    ({notify.TOKEN_KEY: "", notify.CHAT_ID_KEY: "42"}, notify.TOKEN_KEY),
+    ({notify.TOKEN_KEY: "tok", notify.CHAT_ID_KEY: "   "}, notify.CHAT_ID_KEY),
+])
+def test_missing_values_raise(tmp_path, config, missing):
+    path = tmp_path / "partial.json"
+    path.write_text(json.dumps(config), encoding="utf-8")
+    with pytest.raises(notify.NotifyError, match=missing):
+        notify.load_credentials(path)
+
+
+def test_example_placeholder_rejected(tmp_path):
+    """예시 파일을 그대로 복사만 하고 값을 안 채운 경우를 잡는다."""
+    path = tmp_path / "example.json"
+    path.write_text(notify.EXAMPLE_CONFIG_PATH.read_text(encoding="utf-8"), encoding="utf-8")
+    with pytest.raises(notify.NotifyError, match="예시 그대로"):
+        notify.load_credentials(path)
+
+
+def test_numeric_chat_id_accepted(tmp_path):
+    """chat_id를 숫자로 적어도 문자열로 정규화한다."""
+    path = tmp_path / "num.json"
+    path.write_text(json.dumps({notify.TOKEN_KEY: "tok", notify.CHAT_ID_KEY: 42}),
+                    encoding="utf-8")
+    assert notify.load_credentials(path) == ("tok", "42")
+
+
+def test_world_readable_warns(tmp_path, caplog):
+    path = tmp_path / "open.json"
+    path.write_text(json.dumps({notify.TOKEN_KEY: "tok", notify.CHAT_ID_KEY: "42"}),
+                    encoding="utf-8")
+    path.chmod(0o644)
+    with caplog.at_level("WARNING"):
+        notify.load_credentials(path)
+    assert "chmod 600" in caplog.text
+
+
+def test_config_exists(config_file, tmp_path):
+    assert notify.config_exists(config_file) is True
+    assert notify.config_exists(tmp_path / "none.json") is False
+
+
+def test_setup_hint_mentions_example():
+    hint = notify.setup_hint()
+    assert "telegram.json.example" in hint
+    assert "chmod 600" in hint
+
+
+def test_notifier_reads_config_file(config_file):
+    n = notify.TelegramNotifier(config_path=config_file)
     assert n.token == "tok" and n.chat_id == "42"
 
 
-def test_explicit_args_override_env(monkeypatch):
-    monkeypatch.setenv(notify.TOKEN_ENV, "env-tok")
-    monkeypatch.setenv(notify.CHAT_ID_ENV, "env-chat")
-    n = notify.TelegramNotifier(token="arg-tok", chat_id="arg-chat")
+def test_explicit_args_skip_file(tmp_path):
+    """토큰을 직접 주면 설정 파일이 없어도 동작한다."""
+    n = notify.TelegramNotifier(token="arg-tok", chat_id="arg-chat",
+                                config_path=tmp_path / "none.json")
     assert n.token == "arg-tok" and n.chat_id == "arg-chat"
 
 
@@ -136,7 +202,7 @@ def test_send_non_json_response_raises(monkeypatch):
         notify.TelegramNotifier(token="tok", chat_id="42").send("hi")
 
 
-def test_send_picks_end_to_end(monkeypatch):
+def test_send_picks_end_to_end(monkeypatch, config_file):
     captured = {}
 
     def fake_post(url, json=None, timeout=None):
@@ -144,10 +210,9 @@ def test_send_picks_end_to_end(monkeypatch):
         return FakeResponse({"ok": True, "result": {"message_id": 1}})
 
     monkeypatch.setattr(requests, "post", fake_post)
-    monkeypatch.setenv(notify.TOKEN_ENV, "tok")
-    monkeypatch.setenv(notify.CHAT_ID_ENV, "42")
 
-    notify.send_picks(PICKS, draw_no=1234, strategy="unpopular")
+    notify.send_picks(PICKS, draw_no=1234, strategy="unpopular",
+                      config_path=config_file)
 
     assert "1234회 추천 번호" in captured["text"]
     assert "07 14 17 20 42 45" in captured["text"]

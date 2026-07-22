@@ -14,6 +14,8 @@
     python run.py --no-telegram        # 발송 없이 화면 출력만
     python run.py --skip-update        # 크롤링 건너뛰고 기존 CSV 사용
 
+텔레그램 설정은 `config/telegram.json` 파일에서 읽는다(예시: config/telegram.json.example).
+
 cron 등록 예 (매주 토요일 18시):
     0 18 * * 6 cd /path/to/lotto_claude && .venv/bin/python run.py >> run.log 2>&1
 
@@ -24,9 +26,9 @@ from __future__ import annotations
 
 import argparse
 import logging
-import os
 import sys
 from datetime import datetime
+from pathlib import Path
 
 import pandas as pd
 
@@ -128,27 +130,33 @@ def generate(df: pd.DataFrame, strategy: str, games: int, seed: int | None) -> t
 
 # ------------------------------------------------------------------ 4. 발송
 
-def dispatch(picks: list[list[int]], next_draw: int, strategy: str, enabled: bool) -> bool:
+def dispatch(
+    picks: list[list[int]],
+    next_draw: int,
+    strategy: str,
+    enabled: bool,
+    config_path: str | None = None,
+) -> bool:
     """텔레그램 발송. 전송했으면 True, 건너뛰었으면 False."""
     step(4, "텔레그램 발송")
     if not enabled:
         print("--no-telegram 지정 — 발송하지 않았습니다.")
         return False
 
-    if not (os.environ.get(notify.TOKEN_ENV) and os.environ.get(notify.CHAT_ID_ENV)):
-        print("텔레그램이 설정되지 않아 건너뜁니다. 발송하려면 아래를 설정하세요:")
-        print(f"  export {notify.TOKEN_ENV}='봇토큰'")
-        print(f"  export {notify.CHAT_ID_ENV}='채팅ID'")
+    path = Path(config_path) if config_path else notify.DEFAULT_CONFIG_PATH
+    if not notify.config_exists(path):
+        # 설정 파일이 없는 건 오류가 아니라 '아직 설정 안 함'이므로 안내 후 계속
+        print(notify.setup_hint(path))
         return False
 
     note = f"생성 시각: {datetime.now():%Y-%m-%d %H:%M}"
     try:
-        notify.send_picks(picks, next_draw, strategy, note=note)
+        notify.send_picks(picks, next_draw, strategy, note=note, config_path=path)
     except notify.NotifyError as exc:
         print(f"발송 실패: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
 
-    print("발송 완료.")
+    print(f"발송 완료. (설정: {path})")
     return True
 
 
@@ -169,6 +177,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--csv", default=str(storage.DEFAULT_CSV), help="데이터 CSV 경로")
     parser.add_argument("--skip-update", action="store_true", help="크롤링 없이 기존 CSV 사용")
     parser.add_argument("--no-telegram", action="store_true", help="텔레그램 발송 건너뛰기")
+    parser.add_argument("--telegram-config", metavar="PATH",
+                        help=f"텔레그램 설정 파일 경로 (기본 {notify.DEFAULT_CONFIG_PATH})")
     parser.add_argument("-v", "--verbose", action="store_true", help="상세 로그")
     return parser
 
@@ -183,7 +193,8 @@ def main(argv: list[str] | None = None) -> int:
     df = collect(args.csv, args.skip_update)
     analyze(df, args.strategy)
     picks, next_draw = generate(df, args.strategy, args.games, args.seed)
-    sent = dispatch(picks, next_draw, args.strategy, not args.no_telegram)
+    sent = dispatch(picks, next_draw, args.strategy, not args.no_telegram,
+                    config_path=args.telegram_config)
 
     elapsed = (datetime.now() - started).total_seconds()
     print(f"\n{'=' * 60}")

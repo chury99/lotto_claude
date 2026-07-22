@@ -212,31 +212,43 @@ pairwise가 학습하는 "함께 나온 빈도"는 전부 표본 잡음입니다
 
 추천 번호를 텔레그램 메시지로 보낼 수 있습니다.
 
-```bash
-export TELEGRAM_BOT_TOKEN='봇토큰'
-export TELEGRAM_CHAT_ID='채팅ID'
-python main.py predict -s unpopular -n 5 --telegram
-```
-
-봇 준비:
+### 1. 봇 만들기
 
 1. 텔레그램에서 [@BotFather](https://t.me/BotFather)에게 `/newbot` — 토큰을 받습니다.
 2. 만든 봇과 대화를 시작합니다(먼저 아무 메시지나 보내야 봇이 답할 수 있습니다).
 3. `https://api.telegram.org/bot<토큰>/getUpdates` 를 열어 `chat.id`를 확인합니다.
 
-토큰과 채팅 ID는 **환경변수로만** 읽습니다. 코드나 저장소에 넣지 마세요(`.env`는
-`.gitignore`에 포함돼 있습니다). 전송 실패 시 종료 코드 1과 함께 원인을 출력하며,
-오류 메시지에 토큰이 섞이지 않도록 처리했습니다.
-
-매주 토요일 추첨 전에 자동으로 받고 싶다면 cron에 등록할 수 있습니다:
+### 2. 설정 파일 만들기
 
 ```bash
-# 매주 토요일 오후 6시 (crontab -e)
-0 18 * * 6 cd /path/to/lotto_claude && .venv/bin/python run.py >> run.log 2>&1
+cp config/telegram.json.example config/telegram.json
+chmod 600 config/telegram.json    # 본인만 읽도록 (권장)
 ```
 
-cron에는 환경변수가 상속되지 않으므로, crontab 상단에 직접 넣거나 래퍼 스크립트에서
-`export` 하세요.
+`config/telegram.json` 을 열어 값을 채웁니다:
+
+```json
+{
+  "bot_token": "123456:ABC-DEF...",
+  "chat_id": "123456789"
+}
+```
+
+이 파일은 `.gitignore`에 있어 **커밋되지 않습니다**(`config/*.json` 전체를 무시하고
+`.example` 파일만 추적합니다). 파일이 다른 사용자에게도 읽히는 권한이면 실행 시
+경고가 뜹니다.
+
+### 3. 실행
+
+```bash
+python run.py                                  # 전 과정 실행 후 발송
+python main.py predict -s unpopular --telegram # 추천만 하고 발송
+python run.py --telegram-config /경로/다른.json  # 설정 파일 위치 지정
+```
+
+설정 파일이 **없으면** 안내만 출력하고 나머지는 정상 진행합니다(종료 코드 0).
+설정 파일이 있는데 값이 비었거나 JSON이 깨졌거나 전송이 실패하면 종료 코드 1을
+반환합니다 — cron에서 진짜 오류만 감지할 수 있습니다.
 
 ## 검증 결과
 
@@ -273,7 +285,7 @@ pip install pytest
 python -m pytest tests -q
 ```
 
-파싱·분석·예측 로직을 네트워크 없이 고정 데이터로 검증합니다 (108개 테스트).
+파싱·분석·예측 로직을 네트워크 없이 고정 데이터로 검증합니다 (120개 테스트).
 LSTM 테스트는 torch가 설치된 환경에서만 실행되고, 없으면 자동으로 건너뜁니다.
 
 ## 프로젝트 구조
@@ -282,6 +294,7 @@ LSTM 테스트는 torch가 설치된 환경에서만 실행되고, 없으면 자
 lotto_claude/
 ├── run.py               # 전 과정 자동 실행 런처
 ├── main.py              # CLI 진입점
+├── config/              # telegram.json (자격증명, git 미포함)
 ├── lotto/
 │   ├── crawler.py       # 동행복권 사이트 크롤링
 │   ├── storage.py       # CSV 캐시 / 증분 업데이트
