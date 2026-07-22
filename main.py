@@ -3,6 +3,7 @@
 
     python main.py update              # 당첨번호 크롤링 (증분)
     python main.py stats               # 통계 요약
+    python main.py combos              # 2개/3개 번호 조합 출현 분석
     python main.py predict -n 5        # 다음 회차 번호 추천
     python main.py backtest            # 전략 성능 검증
 """
@@ -73,6 +74,25 @@ def cmd_predict(args: argparse.Namespace) -> None:
     print("   통계적 편차에 기반한 참고용이며, 당첨 확률을 높여주지 않습니다.")
 
 
+def cmd_combos(args: argparse.Namespace) -> None:
+    df = _load_or_exit(args.csv)
+    for r, name in ((2, "2개 조합"), (3, "3개 조합")):
+        counts = analyzer.combo_frequency(df, r=r)
+        stats = analyzer.combo_uniformity(counts)
+        print(f"\n=== {name} ({stats['categories']:,}가지) ===")
+        print(f"관측 {stats['observations']:,}건 / 조합당 기대 {stats['expected_per_combo']:.2f}회")
+        print(f"\n최다 출현 top {args.top}:")
+        print(analyzer.top_combos(df, r=r, k=args.top).to_string(index=False))
+        print(f"\n균등 가설 검정: 카이제곱 z-점수 {stats['z_score']:+.2f}, "
+              f"분산/평균 {stats['dispersion']:.3f} (균등 무작위면 z≈0, 분산/평균≈1)")
+        verdict = "균등 가설과 부합 — 특별히 잘 나오는 조합은 없습니다." \
+            if abs(stats["z_score"]) < 3 else "균등 가설에서 벗어난 것으로 보입니다."
+        print(f"해석: {verdict}")
+        if args.poisson:
+            print("\n출현 횟수 분포 vs 포아송 이론값:")
+            print(analyzer.poisson_table(counts).to_string(index=False))
+
+
 def cmd_backtest(args: argparse.Namespace) -> None:
     df = _load_or_exit(args.csv)
     if args.strategy:
@@ -120,6 +140,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_predict.add_argument("--no-filter", action="store_true", help="조합 필터 끄기")
     p_predict.add_argument("--show-scores", action="store_true", help="번호별 점수 표 출력")
     p_predict.set_defaults(func=cmd_predict)
+
+    p_combos = sub.add_parser("combos", help="2개/3개 번호 조합 출현 분석")
+    p_combos.add_argument("--top", type=int, default=10, help="상위 몇 개 조합을 볼지")
+    p_combos.add_argument("--poisson", action="store_true", help="포아송 분포 비교표 출력")
+    p_combos.set_defaults(func=cmd_combos)
 
     p_back = sub.add_parser("backtest", help="전략 성능 검증")
     p_back.add_argument("-s", "--strategy", choices=predictor.available_strategies(),

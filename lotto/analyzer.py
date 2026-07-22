@@ -5,7 +5,9 @@
 
 from __future__ import annotations
 
+import math
 from collections import Counter
+from itertools import combinations
 
 import numpy as np
 import pandas as pd
@@ -91,6 +93,82 @@ def pair_matrix(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(
         counts[1:, 1:], index=list(NUMBER_RANGE), columns=list(NUMBER_RANGE)
     )
+
+
+def combo_frequency(df: pd.DataFrame, r: int = 2, last_n: int | None = None) -> pd.Series:
+    """r개 번호 조합별 동시 출현 횟수. 한 번도 안 나온 조합도 0으로 포함한다.
+
+    한 회차(6개)에는 C(6,r)개의 r-조합이 들어 있다.
+      r=2: 조합 990가지, 회차당 15개 관측
+      r=3: 조합 14,190가지, 회차당 20개 관측
+    """
+    data = df.sort_values("draw_no")
+    if last_n is not None:
+        data = data.tail(last_n)
+    counter: Counter = Counter()
+    for row in numbers_matrix(data):
+        counter.update(combinations(sorted(row.tolist()), r))
+    return pd.Series(
+        {c: counter.get(c, 0) for c in combinations(range(1, 46), r)},
+        name=f"combo{r}_count",
+    )
+
+
+def combo_uniformity(counts: pd.Series) -> dict[str, float]:
+    """조합 출현 횟수가 균등 가설(모든 조합이 같은 확률)과 부합하는지 검정한다.
+
+    - chi2 / z_score: 카이제곱 적합도 통계량과 그 정규 근사 z-점수.
+      자유도가 크므로 z = (chi2 - dof) / sqrt(2·dof)가 표준정규에 가깝다.
+      |z|가 2~3 이내면 균등 가설과 부합한다.
+    - dispersion: 분산/평균. 균등 무작위(포아송 근사)라면 1에 가깝다.
+    """
+    k = len(counts)
+    total = int(counts.sum())
+    expected = total / k
+    chi2 = float(((counts - expected) ** 2 / expected).sum())
+    dof = k - 1
+    return {
+        "categories": k,
+        "observations": total,
+        "expected_per_combo": expected,
+        "chi2": chi2,
+        "dof": dof,
+        "z_score": (chi2 - dof) / math.sqrt(2 * dof),
+        "dispersion": float(counts.var(ddof=0) / counts.mean()),
+    }
+
+
+def poisson_table(counts: pd.Series) -> pd.DataFrame:
+    """출현 횟수 분포를 포아송 이론값과 나란히 놓는다.
+
+    균등 무작위라면 각 조합의 출현 횟수는 근사적으로 Poisson(λ=평균)을 따른다.
+    관측 분포가 이 이론값과 잘 맞는지 눈으로 확인하는 용도.
+    """
+    lam = float(counts.mean())
+    k = len(counts)
+    observed = counts.value_counts().sort_index()
+    max_count = int(observed.index.max())
+    rows = []
+    for i in range(max_count + 1):
+        pmf = math.exp(-lam) * lam**i / math.factorial(i)
+        rows.append({
+            "출현횟수": i,
+            "관측_조합수": int(observed.get(i, 0)),
+            "포아송_기대": round(k * pmf, 1),
+        })
+    return pd.DataFrame(rows)
+
+
+def top_combos(df: pd.DataFrame, r: int = 2, k: int = 10) -> pd.DataFrame:
+    """가장 자주 함께 나온 r개 조합 상위 k개 (기대값과 비교)."""
+    counts = combo_frequency(df, r=r)
+    expected = counts.sum() / len(counts)
+    top = counts.sort_values(ascending=False).head(k)
+    return pd.DataFrame({
+        "조합": ["-".join(map(str, c)) for c in top.index],
+        "출현": top.to_numpy(),
+        "기대": round(expected, 2),
+    }).reset_index(drop=True)
 
 
 def carryover_rate(df: pd.DataFrame) -> float:

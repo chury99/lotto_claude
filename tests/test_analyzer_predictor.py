@@ -9,16 +9,21 @@ from lotto import analyzer, backtest, predictor
 
 @pytest.fixture
 def df():
-    """무작위 회차 300개로 만든 합성 이력."""
+    """무작위 회차 300개로 만든 합성 이력.
+
+    주의: 7개를 정렬한 뒤 마지막을 보너스로 쓰면 보너스가 항상 최댓값이 되어
+    당첨번호 6개가 작은 쪽으로 치우친다. 정렬 전에 분리해야 균등하다.
+    """
     rng = np.random.default_rng(0)
     rows = []
     for i in range(1, 301):
-        nums = sorted(rng.choice(np.arange(1, 46), size=7, replace=False).tolist())
+        picks = rng.choice(np.arange(1, 46), size=7, replace=False)
+        nums = sorted(picks[:6].tolist())
         rows.append({
             "draw_no": i,
             "draw_date": f"2020-01-{(i % 28) + 1:02d}",
             **{f"n{j+1}": nums[j] for j in range(6)},
-            "bonus": nums[6],
+            "bonus": int(picks[6]),
         })
     return pd.DataFrame(rows)
 
@@ -140,6 +145,91 @@ def test_filtered_predictions_pass_filter(df):
     combo_filter = predictor.CombinationFilter.from_history(df)
     for combo in predictor.predict(df, games=10, seed=3):
         assert combo_filter.accepts(combo)
+
+
+def test_combo_frequency_totals(df):
+    pairs = analyzer.combo_frequency(df, r=2)
+    triples = analyzer.combo_frequency(df, r=3)
+    assert len(pairs) == 990        # C(45,2)
+    assert len(triples) == 14190    # C(45,3)
+    assert pairs.sum() == len(df) * 15   # 회차당 C(6,2)
+    assert triples.sum() == len(df) * 20  # 회차당 C(6,3)
+
+
+def test_combo_frequency_fixed(fixed_df):
+    pairs = analyzer.combo_frequency(fixed_df, r=2)
+    assert pairs.loc[(1, 2)] == len(fixed_df)   # 매 회차 함께 출현
+    assert pairs.loc[(1, 45)] == 0
+    triples = analyzer.combo_frequency(fixed_df, r=3)
+    assert triples.loc[(1, 2, 3)] == len(fixed_df)
+
+
+def test_combo_uniformity_random_data(df):
+    """무작위 합성 데이터는 균등 가설과 부합해야 한다 (|z| 작음, 분산/평균 ≈ 1)."""
+    stats = analyzer.combo_uniformity(analyzer.combo_frequency(df, r=2))
+    assert abs(stats["z_score"]) < 4
+    assert 0.7 < stats["dispersion"] < 1.3
+
+
+def test_combo_uniformity_degenerate_data(fixed_df):
+    """같은 조합만 반복되는 데이터는 균등 가설에서 크게 벗어나야 한다."""
+    stats = analyzer.combo_uniformity(analyzer.combo_frequency(fixed_df, r=2))
+    assert stats["z_score"] > 10
+
+
+def test_poisson_table(df):
+    counts = analyzer.combo_frequency(df, r=3)
+    table = analyzer.poisson_table(counts)
+    assert table["관측_조합수"].sum() == 14190
+    # 포아송 기대의 합도 전체 조합 수와 비슷해야 한다
+    assert table["포아송_기대"].sum() == pytest.approx(14190, rel=0.05)
+
+
+def test_top_combos(df):
+    top = analyzer.top_combos(df, r=2, k=5)
+    assert len(top) == 5
+    assert (top["출현"].diff().dropna() <= 0).all()  # 내림차순
+
+
+def test_pairwise_strategy_available():
+    assert "pairwise" in predictor.available_strategies()
+
+
+def test_pairwise_predict_valid(df):
+    picks = predictor.predict(df, strategy="pairwise", games=5, seed=1)
+    assert len(picks) == 5
+    for combo in picks:
+        assert len(set(combo)) == 6
+        assert all(1 <= n <= 45 for n in combo)
+        assert combo == sorted(combo)
+
+
+def test_pairwise_reproducible(df):
+    assert (predictor.predict(df, strategy="pairwise", seed=3)
+            == predictor.predict(df, strategy="pairwise", seed=3))
+
+
+def test_pairwise_follows_pair_structure():
+    """1~6과 7~12가 각각 항상 함께 나온 이력이라면, 표본도 같은 무리에서 나와야 한다."""
+    rows = []
+    for i in range(1, 201):
+        nums = [1, 2, 3, 4, 5, 6] if i % 2 == 0 else [7, 8, 9, 10, 11, 12]
+        rows.append({
+            "draw_no": i, "draw_date": "2020-01-01",
+            **{f"n{j+1}": n for j, n in enumerate(nums)}, "bonus": 45,
+        })
+    history = pd.DataFrame(rows)
+
+    # predict()는 중복 조합을 제거하는데 순수 조합은 두 가지뿐이므로,
+    # 중복을 허용하는 샘플러를 직접 사용해 분포를 본다.
+    sample = predictor.build_sampler(history, "pairwise", use_filter=False)
+    rng = np.random.default_rng(0)
+    picks = [sample(rng) for _ in range(50)]
+
+    group_a, group_b = set(range(1, 7)), set(range(7, 13))
+    pure = sum(1 for c in picks if set(c) == group_a or set(c) == group_b)
+    # 첫 번호가 무리 밖(약 19%)이거나 평활(α=1) 탓에 혼합이 일부 생긴다
+    assert pure >= 30
 
 
 def test_clt_theoretical_constants():

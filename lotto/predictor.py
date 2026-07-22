@@ -30,6 +30,12 @@ _REGISTRY: dict[str, Strategy] = {}
 ComboScorer = Callable[[list[int]], float]
 _COMBO_REGISTRY: dict[str, Callable[[pd.DataFrame], ComboScorer]] = {}
 
+# 커스텀 샘플러: 전략 이름 -> (df -> (rng -> 조합)).
+# 번호를 독립적으로 뽑지 않는 전략(순차 조건부 샘플링 등)용. 등록돼 있으면
+# build_sampler가 번호별 가중치 경로 대신 이것을 쓴다(필터는 공통 적용).
+Sampler = Callable[[np.random.Generator], list[int]]
+_SAMPLER_REGISTRY: dict[str, Callable[[pd.DataFrame], Sampler]] = {}
+
 
 def register(name: str) -> Callable[[Strategy], Strategy]:
     def deco(fn: Strategy) -> Strategy:
@@ -45,8 +51,15 @@ def register_combo(name: str) -> Callable:
     return deco
 
 
+def register_sampler(name: str) -> Callable:
+    def deco(fn: Callable[[pd.DataFrame], Sampler]) -> Callable:
+        _SAMPLER_REGISTRY[name] = fn
+        return fn
+    return deco
+
+
 def available_strategies() -> list[str]:
-    return sorted(_REGISTRY)
+    return sorted(set(_REGISTRY) | set(_SAMPLER_REGISTRY))
 
 
 def _normalize(scores: pd.Series) -> pd.Series:
@@ -109,6 +122,49 @@ def balanced_scores(df: pd.DataFrame) -> pd.Series:
     }
     total = sum(s * w for s, w in parts.values())
     return _normalize(total)
+
+
+# --------------------------------------------------- 2개 조합(pairwise) 전략
+#
+# 번호를 독립적으로 6개 뽑는 대신, "이미 뽑은 번호들과 과거에 자주 함께 나온
+# 번호"를 다음 번호로 뽑는 순차 조건부 샘플링. 다음 번호 n의 가중치는
+#   w(n) = Π_{m ∈ 이미 뽑은 번호} (pair(m, n) + α)
+# 로, 2개 조합의 경험적 동시 출현 확률을 그대로 쓴다. α=1(라플라스 평활)은
+# 한 번도 같이 안 나온 쌍의 확률이 0이 되는 것을 막는다. 곱은 로그 공간에서
+# 계산해 언더플로를 피한다.
+
+PAIRWISE_SMOOTHING = 1.0
+
+
+@register("pairwise")
+def pairwise_scores(df: pd.DataFrame) -> pd.Series:
+    """score_table용 번호별 관점: 다른 번호들과의 동시 출현 횟수 합(주변 강도).
+
+    실제 샘플링은 pairwise_sampler(순차 조건부)가 담당한다.
+    """
+    pairs = analyzer.pair_matrix(df)
+    return _normalize(pairs.sum(axis=1).astype(float))
+
+
+@register_sampler("pairwise")
+def pairwise_sampler(df: pd.DataFrame) -> Sampler:
+    counts = analyzer.pair_matrix(df).to_numpy().astype(float) + PAIRWISE_SMOOTHING
+    log_pairs = np.log(counts)  # (45, 45), 대각선은 log(α)지만 선택에서 제외됨
+
+    marginal = counts.sum(axis=1)
+    marginal = marginal / marginal.sum()
+
+    def sample(rng: np.random.Generator) -> list[int]:
+        chosen = [int(rng.choice(45, p=marginal))]  # 0-based 인덱스
+        while len(chosen) < 6:
+            log_w = log_pairs[chosen].sum(axis=0)
+            w = np.exp(log_w - log_w.max())
+            w[chosen] = 0.0
+            w /= w.sum()
+            chosen.append(int(rng.choice(45, p=w)))
+        return sorted(n + 1 for n in chosen)
+
+    return sample
 
 
 @register("lstm")
@@ -233,15 +289,29 @@ def build_sampler(
     use_filter: bool = True,
 ) -> Callable[[np.random.Generator], list[int]]:
     """전략 이름으로 '조합 1개를 뽑는 함수'를 만든다. predict와 backtest가 공유한다."""
-    if strategy not in _REGISTRY:
+    if strategy not in _REGISTRY and strategy not in _SAMPLER_REGISTRY:
         raise ValueError(
             f"알 수 없는 전략: {strategy!r} (사용 가능: {', '.join(available_strategies())})"
         )
     if df.empty:
         raise ValueError("분석할 데이터가 없습니다. 먼저 `python main.py update`를 실행하세요.")
 
-    weights = _REGISTRY[strategy](df)
     combo_filter = CombinationFilter.from_history(df) if use_filter else None
+
+    if strategy in _SAMPLER_REGISTRY:
+        base = _SAMPLER_REGISTRY[strategy](df)
+
+        def sample(rng: np.random.Generator, max_attempts: int = 500) -> list[int]:
+            combo: list[int] = []
+            for _ in range(max_attempts):
+                combo = base(rng)
+                if combo_filter is None or combo_filter.accepts(combo):
+                    return combo
+            return combo
+
+        return sample
+
+    weights = _REGISTRY[strategy](df)
     combo_scorer = _COMBO_REGISTRY[strategy](df) if strategy in _COMBO_REGISTRY else None
 
     def sample(rng: np.random.Generator) -> list[int]:
