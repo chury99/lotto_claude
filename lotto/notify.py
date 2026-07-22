@@ -258,9 +258,16 @@ def send_picks(
     draw_no: int,
     strategy: str,
     note: str | None = None,
+    draw_date: str | None = None,
+    history: str | None = None,
     **kwargs,
 ) -> dict:
-    """추천 조합을 포맷해서 바로 전송하는 편의 함수."""
-    return TelegramNotifier(**kwargs).send(
-        format_message(picks, draw_no, strategy, note)
+    """추천 조합을 포맷해서 바로 전송하는 편의 함수.
+
+    메시지 구성 인자(note/draw_date/history)는 format_message로,
+    나머지(token/chat_id/config_path/timeout)는 TelegramNotifier로 넘어간다.
+    """
+    message = format_message(
+        picks, draw_no, strategy, note=note, draw_date=draw_date, history=history
     )
+    return TelegramNotifier(**kwargs).send(message)

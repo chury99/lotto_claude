@@ -306,3 +306,28 @@ def test_save_credentials_writes_and_chmods(tmp_path):
 def test_save_credentials_roundtrip_unicode(tmp_path):
     path = notify.save_credentials("토큰", "42", tmp_path / "t.json")
     assert json.loads(path.read_text(encoding="utf-8"))[notify.TOKEN_KEY] == "토큰"
+
+
+def test_send_picks_forwards_message_fields(monkeypatch, config_file):
+    """draw_date/history가 메시지 구성으로 전달되는지 확인.
+
+    (이 인자들이 TelegramNotifier 생성자로 잘못 새어 들어간 회귀가 있었다.)
+    """
+    captured = {}
+
+    def fake_post(url, json=None, timeout=None):
+        captured.update(json)
+        return FakeResponse({"ok": True, "result": {"message_id": 1}})
+
+    monkeypatch.setattr(requests, "post", fake_post)
+
+    notify.send_picks(PICKS, draw_no=1234, strategy="unpopular",
+                      note="생성 시각: 지금",
+                      draw_date="2026-07-25 (토)",
+                      history="1등 0 · 5등 133",
+                      config_path=config_file)
+
+    text = captured["text"]
+    assert "추첨일: 2026-07-25 (토)" in text
+    assert "1등 0 · 5등 133" in text
+    assert "생성 시각: 지금" in text
