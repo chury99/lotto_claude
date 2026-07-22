@@ -4,6 +4,7 @@
     python main.py update              # 당첨번호 크롤링 (증분)
     python main.py stats               # 통계 요약
     python main.py combos              # 2개/3개 번호 조합 출현 분석
+    python main.py prize               # 전략별 당첨 시 기대 상금 비교
     python main.py predict -n 5        # 다음 회차 번호 추천
     python main.py backtest            # 전략 성능 검증
 """
@@ -17,7 +18,7 @@ import sys
 
 import pandas as pd
 
-from lotto import analyzer, backtest, predictor, storage
+from lotto import analyzer, backtest, popularity, predictor, storage
 
 
 def setup_logging(verbose: bool) -> None:
@@ -93,6 +94,22 @@ def cmd_combos(args: argparse.Namespace) -> None:
             print(analyzer.poisson_table(counts).to_string(index=False))
 
 
+def cmd_prize(args: argparse.Namespace) -> None:
+    df = _load_or_exit(args.csv)
+
+    model = popularity.fit(df)
+    print(f"\n=== 조합 인기도 모델 ({model.n_draws}회차 적합) ===")
+    print("(계수 양수 = 그 특성이 있을수록 인기 조합 → 당첨 시 상금이 쪼개짐)")
+    print(model.summary().round(4).to_string())
+
+    strategies = args.strategies or predictor.available_strategies()
+    table = popularity.prize_comparison(df, strategies, games=args.games, seed=args.seed)
+    print(f"\n=== 전략별 기대 상금 비교 (전략당 {args.games}조합 표본) ===")
+    print(table.to_string(index=False))
+    print("\n※ 당첨 확률은 모든 조합이 동일합니다. 이 표의 차이는 '당첨됐을 때")
+    print("   남들과 얼마나 겹치는가'에서만 나오며, 전체 기대수익률은 여전히 음수입니다.")
+
+
 def cmd_backtest(args: argparse.Namespace) -> None:
     df = _load_or_exit(args.csv)
     if args.strategy:
@@ -145,6 +162,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_combos.add_argument("--top", type=int, default=10, help="상위 몇 개 조합을 볼지")
     p_combos.add_argument("--poisson", action="store_true", help="포아송 분포 비교표 출력")
     p_combos.set_defaults(func=cmd_combos)
+
+    p_prize = sub.add_parser("prize", help="전략별 '당첨 시 기대 상금' 비교 (인기도 모델)")
+    p_prize.add_argument("-n", "--games", type=int, default=300, help="전략당 표본 조합 수")
+    p_prize.add_argument("-s", "--strategies", nargs="*", help="비교할 전략 (생략 시 전체)")
+    p_prize.add_argument("--seed", type=int, default=42, help="난수 시드")
+    p_prize.set_defaults(func=cmd_prize)
 
     p_back = sub.add_parser("backtest", help="전략 성능 검증")
     p_back.add_argument("-s", "--strategy", choices=predictor.available_strategies(),

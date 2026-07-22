@@ -124,6 +124,48 @@ def balanced_scores(df: pd.DataFrame) -> pd.Series:
     return _normalize(total)
 
 
+# --------------------------------------------------- 비인기(unpopular) 전략
+#
+# 당첨 확률을 높이는 게 아니라 '당첨 시 나눠 갖는 사람 수'를 줄이는 전략.
+# popularity 모듈이 회차별 1등 당첨자 수로 조합 인기도를 회귀 추정하고,
+# 여기서는 인기도의 역수에 비례하게 조합을 뽑는다: 샘플링 분포 ∝ exp(-η(조합)).
+#
+# η의 번호 단위 항(sum/low31/low12)은 번호별 가중치 exp(-η_n)으로,
+# 조합 수준 항(consec)은 조합 점수(기각 샘플링)로 나눠 처리하면
+# 곱해서 정확히 exp(-η(조합))이 된다.
+
+
+# 기울임 강도 γ: 샘플링 분포 ∝ exp(-γ·η). γ=1이면 인기도의 정확한 역수 비례인데,
+# 추정된 η의 폭이 좁아(조합 간 최대 ~0.5) 실질 효과가 약하다. γ를 키우면
+# 비인기 조합에 더 집중하되 조합 다양성은 유지된다.
+UNPOPULAR_SHARPNESS = 4.0
+
+
+@register("unpopular")
+def unpopular_scores(df: pd.DataFrame) -> pd.Series:
+    """번호별 인기도 기여분의 역수. 인기 없는 번호(주로 32~45)에 가중치."""
+    from . import popularity
+    etas = popularity.fit(df).number_etas()
+    return _normalize(np.exp(-UNPOPULAR_SHARPNESS * (etas - etas.min())))
+
+
+@register_combo("unpopular")
+def unpopular_combo_scorer(df: pd.DataFrame) -> ComboScorer:
+    """조합 수준 특성(연속 번호 여부)의 인기도 항을 채택 확률로 변환한다."""
+    from . import popularity
+    beta_consec = float(popularity.fit(df).coef[popularity.FEATURE_NAMES.index("consec")])
+
+    def score(combo: list[int]) -> float:
+        combo = sorted(combo)
+        has_consec = any(b - a == 1 for a, b in zip(combo, combo[1:]))
+        eta = beta_consec * has_consec
+        # exp(-γη)를 최댓값 1로 정규화: η가 낮은(비인기) 쪽이 항상 1
+        eta_min = min(0.0, beta_consec)
+        return math.exp(-UNPOPULAR_SHARPNESS * (eta - eta_min))
+
+    return score
+
+
 # --------------------------------------------------- 2개 조합(pairwise) 전략
 #
 # 번호를 독립적으로 6개 뽑는 대신, "이미 뽑은 번호들과 과거에 자주 함께 나온

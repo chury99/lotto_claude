@@ -24,6 +24,10 @@ def df():
             "draw_date": f"2020-01-{(i % 28) + 1:02d}",
             **{f"n{j+1}": nums[j] for j in range(6)},
             "bonus": int(picks[6]),
+            # unpopular 전략(인기도 회귀)이 쓰는 컬럼
+            "first_prize_winners": int(rng.poisson(10)),
+            "first_prize_amount": 2_000_000_000,
+            "total_sales": 5e10,
         })
     return pd.DataFrame(rows)
 
