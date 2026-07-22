@@ -39,6 +39,7 @@ python main.py backtest -d 200     # 최근 200회차로 전략 성능 검증
 | `predict` | `--seed N` | 난수 시드 고정 (같은 결과 재현) |
 | `predict` | `--show-scores` | 번호별 점수와 근거 지표 표 출력 |
 | `predict` | `--no-filter` | 조합 필터 비활성화 |
+| `predict` | `--telegram` | 추천 번호를 텔레그램으로 전송 |
 | `backtest` | `-s, --strategy` | 특정 전략만 검증 (생략 시 전체 비교) |
 | `backtest` | `-d, --draws` | 검증할 최근 회차 수 (기본 100) |
 
@@ -191,6 +192,33 @@ pairwise가 학습하는 "함께 나온 빈도"는 전부 표본 잡음입니다
 이내, 홀짝이 한쪽으로 완전히 쏠리지 않을 것, 연속 숫자 4개 이상 금지, 같은 십의 자리
 5개 이상 금지. 통계적으로 극단적인 조합을 걸러내는 장치입니다.
 
+## 텔레그램으로 받기
+
+추천 번호를 텔레그램 메시지로 보낼 수 있습니다.
+
+```bash
+export TELEGRAM_BOT_TOKEN='봇토큰'
+export TELEGRAM_CHAT_ID='채팅ID'
+python main.py predict -s unpopular -n 5 --telegram
+```
+
+봇 준비:
+
+1. 텔레그램에서 [@BotFather](https://t.me/BotFather)에게 `/newbot` — 토큰을 받습니다.
+2. 만든 봇과 대화를 시작합니다(먼저 아무 메시지나 보내야 봇이 답할 수 있습니다).
+3. `https://api.telegram.org/bot<토큰>/getUpdates` 를 열어 `chat.id`를 확인합니다.
+
+토큰과 채팅 ID는 **환경변수로만** 읽습니다. 코드나 저장소에 넣지 마세요(`.env`는
+`.gitignore`에 포함돼 있습니다). 전송 실패 시 종료 코드 1과 함께 원인을 출력하며,
+오류 메시지에 토큰이 섞이지 않도록 처리했습니다.
+
+매주 토요일 추첨 전에 자동으로 받고 싶다면 cron에 등록할 수 있습니다:
+
+```bash
+# 매주 토요일 오후 6시 (crontab -e)
+0 18 * * 6 cd /path/to/lotto_claude && .venv/bin/python main.py update && .venv/bin/python main.py predict -s unpopular -n 5 --telegram
+```
+
 ## 검증 결과
 
 백테스트는 과거 각 시점으로 돌아가 "그때까지의 데이터만" 가지고 번호를 뽑았다면 실제
@@ -226,7 +254,7 @@ pip install pytest
 python -m pytest tests -q
 ```
 
-파싱·분석·예측 로직을 네트워크 없이 고정 데이터로 검증합니다 (79개 테스트).
+파싱·분석·예측 로직을 네트워크 없이 고정 데이터로 검증합니다 (93개 테스트).
 LSTM 테스트는 torch가 설치된 환경에서만 실행되고, 없으면 자동으로 건너뜁니다.
 
 ## 프로젝트 구조
@@ -241,6 +269,7 @@ lotto_claude/
 │   ├── predictor.py     # 번호 추천 전략 + 조합 필터
 │   ├── lstm.py          # LSTM 시계열 전략 (torch 선택 설치)
 │   ├── popularity.py    # 조합 인기도 회귀 (당첨 시 기대 상금)
+│   ├── notify.py        # 텔레그램 전송
 │   └── backtest.py      # 전략 성능 검증
 ├── tests/
 └── data/                # 수집 결과 CSV (git 미포함)

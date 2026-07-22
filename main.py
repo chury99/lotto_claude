@@ -74,6 +74,15 @@ def cmd_predict(args: argparse.Namespace) -> None:
     print("\n※ 로또는 매 회차 독립적인 무작위 추첨입니다. 이 추천은 과거 데이터의")
     print("   통계적 편차에 기반한 참고용이며, 당첨 확률을 높여주지 않습니다.")
 
+    if args.telegram:
+        from lotto import notify  # requests만 필요하지만 사용 시점에 임포트
+        try:
+            notify.send_picks(picks, next_draw, args.strategy)
+        except notify.NotifyError as exc:
+            print(f"\n[텔레그램] 전송하지 못했습니다: {exc}", file=sys.stderr)
+            raise SystemExit(1)
+        print("\n[텔레그램] 전송 완료.")
+
 
 def cmd_combos(args: argparse.Namespace) -> None:
     df = _load_or_exit(args.csv)
@@ -128,6 +137,12 @@ def cmd_backtest(args: argparse.Namespace) -> None:
         print(f"\n무작위 선택 시 평균 적중 기댓값: {6 * 6 / 45:.4f}개")
 
 
+def notify_env_hint() -> str:
+    """--telegram 도움말에 필요한 환경변수 이름을 안내한다."""
+    from lotto import notify
+    return f"{notify.TOKEN_ENV}, {notify.CHAT_ID_ENV} 필요"
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="로또 6/45 당첨번호 크롤링 · 분석 · 예측",
@@ -156,6 +171,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_predict.add_argument("--seed", type=int, help="난수 시드 (재현용)")
     p_predict.add_argument("--no-filter", action="store_true", help="조합 필터 끄기")
     p_predict.add_argument("--show-scores", action="store_true", help="번호별 점수 표 출력")
+    p_predict.add_argument("--telegram", action="store_true",
+                           help=f"추천 번호를 텔레그램으로 전송 "
+                                f"({notify_env_hint()})")
     p_predict.set_defaults(func=cmd_predict)
 
     p_combos = sub.add_parser("combos", help="2개/3개 번호 조합 출현 분석")
