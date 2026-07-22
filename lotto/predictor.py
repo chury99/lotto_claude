@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import logging
 import math
 from dataclasses import dataclass
 from typing import Callable
@@ -18,6 +19,8 @@ import numpy as np
 import pandas as pd
 
 from . import analyzer
+
+log = logging.getLogger(__name__)
 
 NUMBERS = np.arange(1, 46)
 
@@ -122,6 +125,58 @@ def balanced_scores(df: pd.DataFrame) -> pd.Series:
     }
     total = sum(s * w for s, w in parts.values())
     return _normalize(total)
+
+
+# --------------------------------------------------- 오라클(oracle) — 부정 데모
+#
+# ⚠️ 이 전략은 일부러 만든 '부정 행위 시연'이다.
+#
+# 백테스트에서 1등·2등을 맞추는 유일한 방법은 미래 정보를 보는 것임을 증명하기
+# 위해, 전달받은 history 밖의 전체 데이터를 몰래 읽어 "다음 회차의 실제 당첨번호"
+# 에 가중치를 준다. 시뮬레이션에서는 1등을 쏟아내지만, 진짜 미래(아직 추첨 전인
+# 회차)를 예측할 때는 볼 데이터가 없으므로 균등 무작위로 전락한다.
+#
+# 시중의 "백테스트에서 1등 다수 적중" 광고가 정확히 이 구조다. 정직한 전략의
+# 1등 기대 횟수는 5,665게임 기준 0.0007회 — 기대 1회가 되려면 8,145,060게임
+# (최근 1133회차 기준 회차당 7,190게임 = 719만원어치)이 필요하다.
+
+ORACLE_BONUS_WEIGHT = 0.2    # 보너스 번호 가중치 — 가끔 5개+보너스(2등)가 나오게
+ORACLE_OTHER_WEIGHT = 1e-4   # 나머지 번호 — 0이면 조합 다양성이 없어 predict가 막힌다
+
+
+def _oracle_source() -> pd.DataFrame:
+    """오라클이 몰래 읽는 전체 데이터. 테스트에서 교체할 수 있도록 분리."""
+    from . import storage
+    return storage.load()
+
+
+ORACLE_SOURCE = _oracle_source
+
+
+@register("oracle")
+def oracle_scores(df: pd.DataFrame) -> pd.Series:
+    """다음 회차의 '실제' 당첨번호에 가중치를 준다 (미래 정보 누출).
+
+    다음 회차가 전체 데이터에 없으면(=진짜 미래) 균등으로 전락한다.
+    """
+    full = ORACLE_SOURCE()
+    next_no = int(df["draw_no"].max()) + 1
+    row = full[full["draw_no"] == next_no] if not full.empty else full
+
+    if row is None or len(row) == 0:
+        log.warning(
+            "oracle: %d회는 아직 추첨 전이라 볼 미래가 없습니다. "
+            "균등 무작위로 동작합니다 — 이것이 이 전략의 실전 성능입니다.", next_no,
+        )
+        return pd.Series(1.0, index=NUMBERS)
+
+    winning = row.iloc[0][analyzer.NUMBER_COLUMNS].astype(int).tolist()
+    bonus = int(row.iloc[0]["bonus"])
+
+    weights = pd.Series(ORACLE_OTHER_WEIGHT, index=NUMBERS)
+    weights.loc[winning] = 1.0
+    weights.loc[bonus] = ORACLE_BONUS_WEIGHT
+    return weights
 
 
 # --------------------------------------------------- 비인기(unpopular) 전략

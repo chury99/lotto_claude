@@ -360,3 +360,56 @@ def test_rank_history_requires_enough_data(df):
 def test_rank_history_is_reproducible(df):
     kwargs = dict(strategy="uniform", games_per_draw=2, min_history=250, seed=9)
     assert backtest.rank_history(df, **kwargs).counts == backtest.rank_history(df, **kwargs).counts
+
+
+# --------------------------------------------------------------- oracle (부정 데모)
+
+@pytest.fixture
+def oracle_source(df, monkeypatch):
+    """오라클이 몰래 읽는 '전체 데이터'를 합성 이력으로 교체한다."""
+    monkeypatch.setattr(predictor, "ORACLE_SOURCE", lambda: df)
+    return df
+
+
+def test_oracle_available():
+    assert "oracle" in predictor.available_strategies()
+
+
+def test_oracle_weights_peak_at_next_winning_numbers(oracle_source, df):
+    """history가 i회차까지면 (i+1)회차의 실제 당첨번호에 가중치가 몰린다."""
+    history = df.iloc[:200]
+    next_row = df.iloc[200]  # 201회차
+    winning = set(next_row[[f"n{i}" for i in range(1, 7)]].astype(int))
+
+    weights = predictor.oracle_scores(history)
+    top6 = set(weights.sort_values(ascending=False).head(6).index)
+    assert top6 == winning
+
+
+def test_oracle_hits_first_and_second_prize_in_backtest(oracle_source, df):
+    """미래를 보면 시뮬레이션에서 1등·2등이 나온다 — 그게 유일한 방법이다."""
+    result = backtest.rank_history(df, strategy="oracle", games_per_draw=5,
+                                   min_history=250, seed=0)
+    assert result.counts["1등"] >= 1
+    assert result.counts["2등"] >= 1
+    # 대부분의 게임이 1등이어야 한다 (누출의 규모 확인)
+    assert result.counts["1등"] > result.total_games * 0.5
+
+
+def test_oracle_degrades_to_uniform_for_real_future(oracle_source, df, caplog):
+    """전체 데이터의 마지막 회차까지 주면 볼 미래가 없어 균등이 된다."""
+    with caplog.at_level("WARNING"):
+        weights = predictor.oracle_scores(df)  # 다음 회차는 아직 없음
+    assert weights.nunique() == 1              # 모든 번호 동일 가중치
+    assert "실전 성능" in caplog.text
+
+
+def test_honest_strategies_cannot_hit_first_prize(df):
+    """정직한 전략(누출 없음)은 같은 조건에서 1등이 나오지 않는다.
+
+    P(1등)=1/8,145,060이므로 250게임에서 1등이 나올 확률은 사실상 0이다.
+    """
+    for strategy in ("uniform", "unpopular"):
+        result = backtest.rank_history(df, strategy=strategy, games_per_draw=5,
+                                       min_history=250, seed=0)
+        assert result.counts["1등"] == 0
