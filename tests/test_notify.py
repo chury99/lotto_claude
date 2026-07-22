@@ -44,10 +44,38 @@ def test_format_message_contains_numbers():
     assert "(합 145)" in msg  # 7+14+17+20+42+45
 
 
-def test_format_message_labels_and_disclaimer():
+def test_format_message_labels():
     msg = notify.format_message(PICKS, draw_no=1, strategy="clt")
     assert "<b>A</b>" in msg and "<b>B</b>" in msg
-    assert "당첨 확률을 높여주지 않습니다" in msg
+
+
+def test_format_message_has_no_disclaimer():
+    """안내 문구는 메시지에서 제거됐다."""
+    msg = notify.format_message(PICKS, draw_no=1, strategy="clt")
+    assert "당첨 확률" not in msg
+    assert "무작위 추첨" not in msg
+
+
+def test_format_message_draw_date():
+    msg = notify.format_message(PICKS, 1234, "unpopular", draw_date="2026-07-25 (토)")
+    assert "추첨일: 2026-07-25 (토)" in msg
+
+
+def test_format_message_without_draw_date():
+    msg = notify.format_message(PICKS, 1234, "unpopular")
+    assert "추첨일" not in msg
+
+
+def test_format_message_history():
+    msg = notify.format_message(PICKS, 1234, "unpopular",
+                                history="1133회차 × 5게임\n1등 0 · 2등 0 · 5등 133")
+    assert "과거 시뮬레이션" in msg
+    assert "5등 133" in msg
+
+
+def test_format_message_without_history():
+    msg = notify.format_message(PICKS, 1234, "unpopular")
+    assert "시뮬레이션" not in msg
 
 
 def test_format_message_sorts_numbers():

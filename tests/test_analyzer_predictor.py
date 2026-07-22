@@ -294,3 +294,69 @@ def test_backtest_compare(df):
         df, strategies=["uniform", "hot"], test_draws=10, games_per_draw=2, min_history=100
     )
     assert list(table["전략"].sort_values()) == ["hot", "uniform"]
+
+
+# --------------------------------------------------------------- 추첨일 / 등수
+
+def test_next_draw_date_adds_week(df):
+    data = df.copy()
+    data.loc[data.index[-1], "draw_date"] = "2026-07-18"  # 토요일
+    assert analyzer.next_draw_date(data) == "2026-07-25 (토)"
+
+
+def test_next_draw_date_weekday_label():
+    data = pd.DataFrame([{
+        "draw_no": 1, "draw_date": "2026-01-01",  # 목요일
+        "n1": 1, "n2": 2, "n3": 3, "n4": 4, "n5": 5, "n6": 6, "bonus": 7,
+    }])
+    assert analyzer.next_draw_date(data) == "2026-01-08 (목)"
+
+
+@pytest.mark.parametrize("combo,expected", [
+    ([1, 2, 3, 4, 5, 6], "1등"),           # 6개
+    ([1, 2, 3, 4, 5, 7], "2등"),           # 5개 + 보너스(7)
+    ([1, 2, 3, 4, 5, 9], "3등"),           # 5개, 보너스 없음
+    ([1, 2, 3, 4, 9, 10], "4등"),          # 4개
+    ([1, 2, 3, 9, 10, 11], "5등"),         # 3개
+    ([1, 2, 9, 10, 11, 12], None),         # 2개 — 미당첨
+    ([9, 10, 11, 12, 13, 14], None),       # 0개
+])
+def test_rank_of(combo, expected):
+    winning = {1, 2, 3, 4, 5, 6}
+    assert backtest.rank_of(combo, winning, bonus=7) == expected
+
+
+def test_rank_of_bonus_only_matters_at_five():
+    """보너스는 5개 맞췄을 때만 등수를 바꾼다."""
+    winning = {1, 2, 3, 4, 5, 6}
+    assert backtest.rank_of([1, 2, 3, 4, 7, 8], winning, bonus=7) == "4등"
+
+
+def test_rank_history_counts(df):
+    result = backtest.rank_history(df, strategy="uniform", games_per_draw=2,
+                                   min_history=250, seed=1)
+    assert result.draws_tested == 50
+    assert result.total_games == 100
+    assert set(result.counts) == set(backtest.RANK_NAMES)
+    assert all(v >= 0 for v in result.counts.values())
+    # 당첨 횟수 합은 전체 게임 수를 넘을 수 없다
+    assert sum(result.counts.values()) <= result.total_games
+
+
+def test_rank_history_summary_line(df):
+    result = backtest.rank_history(df, strategy="uniform", games_per_draw=1,
+                                   min_history=280, seed=1)
+    line = result.summary_line()
+    assert line.startswith("1등 ")
+    assert "5등 " in line
+    assert line.count("·") == 4
+
+
+def test_rank_history_requires_enough_data(df):
+    with pytest.raises(ValueError, match="부족"):
+        backtest.rank_history(df.head(50), min_history=100)
+
+
+def test_rank_history_is_reproducible(df):
+    kwargs = dict(strategy="uniform", games_per_draw=2, min_history=250, seed=9)
+    assert backtest.rank_history(df, **kwargs).counts == backtest.rank_history(df, **kwargs).counts

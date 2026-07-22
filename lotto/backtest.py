@@ -21,6 +21,85 @@ log = logging.getLogger(__name__)
 # 맞춘 개수 -> 등수 (보너스 번호는 단순화를 위해 무시)
 RANK_BY_MATCH = {6: "1등", 5: "3등", 4: "4등", 3: "5등"}
 
+# 실제 로또 등수 체계 (2등은 5개 + 보너스)
+RANK_NAMES = ["1등", "2등", "3등", "4등", "5등"]
+
+
+def rank_of(combo: list[int] | set[int], winning: set[int], bonus: int) -> str | None:
+    """조합의 당첨 등수를 판정한다. 미당첨이면 None.
+
+    1등=6개, 2등=5개+보너스, 3등=5개, 4등=4개, 5등=3개.
+    """
+    matched = len(set(combo) & winning)
+    if matched == 6:
+        return "1등"
+    if matched == 5:
+        return "2등" if bonus in set(combo) else "3등"
+    if matched == 4:
+        return "4등"
+    if matched == 3:
+        return "5등"
+    return None
+
+
+@dataclass
+class RankHistory:
+    """전략을 과거 회차에 적용했을 때의 등수별 당첨 횟수 (시뮬레이션)."""
+
+    strategy: str
+    draws_tested: int
+    games_per_draw: int
+    counts: dict[str, int]  # 등수 -> 횟수
+
+    @property
+    def total_games(self) -> int:
+        return self.draws_tested * self.games_per_draw
+
+    def summary_line(self) -> str:
+        """'1등 0 · 2등 0 · 3등 2 · 4등 55 · 5등 555' 형태의 한 줄."""
+        return " · ".join(f"{name} {self.counts.get(name, 0)}" for name in RANK_NAMES)
+
+
+def rank_history(
+    df: pd.DataFrame,
+    strategy: str = "unpopular",
+    games_per_draw: int = 5,
+    seed: int = 42,
+    min_history: int = 100,
+) -> RankHistory:
+    """과거 각 회차 시점에서 이 전략으로 번호를 샀다면 몇 등에 당첨됐을지 센다.
+
+    워크포워드 방식이라 각 회차 시점에서 그 이전 데이터만 사용한다. 실제 구매
+    이력이 아니라 시뮬레이션 결과다.
+    """
+    df = df.sort_values("draw_no").reset_index(drop=True)
+    if len(df) <= min_history:
+        raise ValueError(
+            f"데이터가 부족합니다. 최소 {min_history + 1}회차가 필요합니다 (현재 {len(df)}회차)."
+        )
+
+    rng = np.random.default_rng(seed)
+    counts: dict[str, int] = {name: 0 for name in RANK_NAMES}
+
+    for i in range(min_history, len(df)):
+        history = df.iloc[:i]
+        row = df.iloc[i]
+        winning = set(row[NUMBER_COLUMNS].astype(int).tolist())
+        bonus = int(row["bonus"])
+
+        sample = predictor.build_sampler(history, strategy)
+        for _ in range(games_per_draw):
+            rank = rank_of(sample(rng), winning, bonus)
+            if rank:
+                counts[rank] += 1
+
+    return RankHistory(
+        strategy=strategy,
+        draws_tested=len(df) - min_history,
+        games_per_draw=games_per_draw,
+        counts=counts,
+    )
+
 
 @dataclass
 class BacktestResult:

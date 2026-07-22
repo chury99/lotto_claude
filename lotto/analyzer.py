@@ -16,6 +16,19 @@ NUMBER_RANGE = range(1, 46)
 NUMBER_COLUMNS = ["n1", "n2", "n3", "n4", "n5", "n6"]
 
 
+WEEKDAY_KR = ["월", "화", "수", "목", "금", "토", "일"]
+
+
+def next_draw_date(df: pd.DataFrame) -> str:
+    """다음 회차 추첨일. 로또는 매주 토요일 추첨이므로 마지막 추첨일 + 7일.
+
+    'YYYY-MM-DD (토)' 형태로 돌려준다.
+    """
+    last = pd.to_datetime(df.sort_values("draw_no")["draw_date"].iloc[-1])
+    nxt = last + pd.Timedelta(days=7)
+    return f"{nxt:%Y-%m-%d} ({WEEKDAY_KR[nxt.weekday()]})"
+
+
 def numbers_matrix(df: pd.DataFrame) -> np.ndarray:
     """(회차 수, 6) 정수 배열. 행 순서는 회차 오름차순."""
     return df.sort_values("draw_no")[NUMBER_COLUMNS].to_numpy(dtype=int)

@@ -98,12 +98,26 @@ def test_analyze_includes_popularity_for_unpopular(df, capsys):
 
 
 def test_generate_returns_picks(df, capsys):
-    picks, next_draw = run.generate(df, strategy="uniform", games=5, seed=1)
+    picks, next_draw, draw_date = run.generate(df, strategy="uniform", games=5, seed=1)
     assert next_draw == 301
     assert len(picks) == 5
     for combo in picks:
         assert len(set(combo)) == 6
-    assert "301회 추천 번호" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "301회 추천 번호" in out
+    assert draw_date in out          # 추첨일이 화면에도 표시된다
+
+
+def test_simulate_history_line(df):
+    line = run.simulate_history(df, strategy="uniform", games=2)
+    assert "회차 × 2게임" in line
+    assert "1등 " in line and "5등 " in line
+
+
+def test_simulate_history_skips_when_short(df, caplog):
+    """데이터가 부족하면 None을 돌려주고 전체 실행은 계속된다."""
+    with caplog.at_level("WARNING"):
+        assert run.simulate_history(df.head(20), strategy="uniform", games=1) is None
 
 
 def test_dispatch_disabled(capsys):
@@ -122,17 +136,21 @@ def test_dispatch_sends_with_config_file(monkeypatch, config_file, capsys):
     sent = {}
 
     def fake_send_picks(picks, draw_no, strategy, note=None, **kw):
-        sent.update(picks=picks, draw_no=draw_no, strategy=strategy,
-                    note=note, config_path=kw.get("config_path"))
+        sent.update(picks=picks, draw_no=draw_no, strategy=strategy, note=note,
+                    config_path=kw.get("config_path"),
+                    draw_date=kw.get("draw_date"), history=kw.get("history"))
         return {"message_id": 1}
 
     monkeypatch.setattr(run.notify, "send_picks", fake_send_picks)
 
     assert run.dispatch([[1, 2, 3, 4, 5, 6]], 1234, "unpopular",
-                        enabled=True, config_path=str(config_file)) is True
+                        enabled=True, config_path=str(config_file),
+                        draw_date="2026-07-25 (토)", history="1등 0") is True
     assert sent["draw_no"] == 1234
     assert "생성 시각" in sent["note"]
     assert str(sent["config_path"]) == str(config_file)
+    assert sent["draw_date"] == "2026-07-25 (토)"
+    assert sent["history"] == "1등 0"
     assert "발송 완료" in capsys.readouterr().out
 
 
@@ -151,14 +169,14 @@ def test_dispatch_exits_on_send_failure(monkeypatch, config_file):
 
 def test_main_skips_send_when_no_config(csv_path, no_config, capsys):
     """설정 파일이 없어도 전체 실행은 성공한다."""
-    code = run.main(["--csv", csv_path, "--skip-update", "-n", "2",
+    code = run.main(["--csv", csv_path, "--skip-update", "-n", "2", "--no-history",
                      "-s", "uniform", "--telegram-config", no_config])
     assert code == 0
     assert "설정 파일이 없습니다" in capsys.readouterr().out
 
 
 def test_main_end_to_end_without_telegram(csv_path, capsys):
-    code = run.main(["--csv", csv_path, "--skip-update", "--no-telegram",
+    code = run.main(["--csv", csv_path, "--skip-update", "--no-telegram", "--no-history",
                      "-n", "3", "-s", "uniform", "--seed", "1"])
     out = capsys.readouterr().out
     assert code == 0
@@ -171,7 +189,7 @@ def test_main_sends_when_configured(csv_path, config_file, monkeypatch, capsys):
     monkeypatch.setattr(run.notify, "send_picks",
                         lambda *a, **k: calls.append(a) or {"message_id": 1})
 
-    code = run.main(["--csv", csv_path, "--skip-update", "-n", "2",
+    code = run.main(["--csv", csv_path, "--skip-update", "-n", "2", "--no-history",
                      "-s", "uniform", "--seed", "1",
                      "--telegram-config", str(config_file)])
     assert code == 0
@@ -188,16 +206,17 @@ def test_main_runs_update_by_default(csv_path, monkeypatch):
         return pd.read_csv(csv_path)
 
     monkeypatch.setattr(run.storage, "update", fake_update)
-    code = run.main(["--csv", csv_path, "--no-telegram", "-n", "1", "-s", "uniform"])
+    code = run.main(["--csv", csv_path, "--no-telegram", "--no-history",
+                     "-n", "1", "-s", "uniform"])
     assert code == 0
     assert called == [csv_path]
 
 
 def test_main_reproducible_with_seed(csv_path, capsys):
-    run.main(["--csv", csv_path, "--skip-update", "--no-telegram",
+    run.main(["--csv", csv_path, "--skip-update", "--no-telegram", "--no-history",
               "-n", "3", "-s", "uniform", "--seed", "7"])
     first = capsys.readouterr().out
-    run.main(["--csv", csv_path, "--skip-update", "--no-telegram",
+    run.main(["--csv", csv_path, "--skip-update", "--no-telegram", "--no-history",
               "-n", "3", "-s", "uniform", "--seed", "7"])
     second = capsys.readouterr().out
 

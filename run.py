@@ -32,7 +32,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from lotto import analyzer, notify, popularity, predictor, storage
+from lotto import analyzer, backtest, notify, popularity, predictor, storage
 
 log = logging.getLogger("run")
 
@@ -116,19 +116,34 @@ def analyze(df: pd.DataFrame, strategy: str) -> None:
 
 # ------------------------------------------------------------------ 3. 생성
 
-def generate(df: pd.DataFrame, strategy: str, games: int, seed: int | None) -> tuple[list[list[int]], int]:
+def generate(df: pd.DataFrame, strategy: str, games: int,
+             seed: int | None) -> tuple[list[list[int]], int, str]:
     step(3, "추천 조합 생성")
     next_draw = int(df["draw_no"].max()) + 1
     picks = predictor.predict(df, strategy=strategy, games=games, seed=seed)
 
-    print(f"{next_draw}회 추천 번호 (전략: {strategy}, {games}게임)\n")
+    draw_date = analyzer.next_draw_date(df)
+    print(f"{next_draw}회 추천 번호 (추첨일 {draw_date}, 전략: {strategy}, {games}게임)\n")
     for i, combo in enumerate(picks, start=1):
         numbers = "  ".join(f"{n:2d}" for n in combo)
         print(f"  {chr(64 + i)}. {numbers}   (합계 {sum(combo)})")
-    return picks, next_draw
+    return picks, next_draw, draw_date
 
 
 # ------------------------------------------------------------------ 4. 발송
+
+def simulate_history(df: pd.DataFrame, strategy: str, games: int) -> str | None:
+    """이 전략을 과거 회차에 적용했을 때의 등수별 당첨 횟수 한 줄."""
+    try:
+        result = backtest.rank_history(df, strategy=strategy, games_per_draw=games)
+    except ValueError as exc:  # 데이터 부족
+        log.warning("과거 시뮬레이션을 건너뜁니다: %s", exc)
+        return None
+    return (
+        f"{result.draws_tested}회차 × {result.games_per_draw}게임 "
+        f"({result.total_games:,}게임)\n{result.summary_line()}"
+    )
+
 
 def dispatch(
     picks: list[list[int]],
@@ -136,6 +151,8 @@ def dispatch(
     strategy: str,
     enabled: bool,
     config_path: str | None = None,
+    draw_date: str | None = None,
+    history: str | None = None,
 ) -> bool:
     """텔레그램 발송. 전송했으면 True, 건너뛰었으면 False."""
     step(4, "텔레그램 발송")
@@ -151,7 +168,8 @@ def dispatch(
 
     note = f"생성 시각: {datetime.now():%Y-%m-%d %H:%M}"
     try:
-        notify.send_picks(picks, next_draw, strategy, note=note, config_path=path)
+        notify.send_picks(picks, next_draw, strategy, note=note, config_path=path,
+                          draw_date=draw_date, history=history)
     except notify.NotifyError as exc:
         print(f"발송 실패: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
@@ -179,6 +197,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-telegram", action="store_true", help="텔레그램 발송 건너뛰기")
     parser.add_argument("--telegram-config", metavar="PATH",
                         help=f"텔레그램 설정 파일 경로 (기본 {notify.DEFAULT_CONFIG_PATH})")
+    parser.add_argument("--no-history", action="store_true",
+                        help="과거 당첨 시뮬레이션 건너뛰기 (빠른 실행)")
     parser.add_argument("-v", "--verbose", action="store_true", help="상세 로그")
     return parser
 
@@ -192,9 +212,18 @@ def main(argv: list[str] | None = None) -> int:
 
     df = collect(args.csv, args.skip_update)
     analyze(df, args.strategy)
-    picks, next_draw = generate(df, args.strategy, args.games, args.seed)
+    picks, next_draw, draw_date = generate(df, args.strategy, args.games, args.seed)
+
+    history = None
+    if not args.no_history:
+        print("\n과거 회차 시뮬레이션 중…")
+        history = simulate_history(df, args.strategy, args.games)
+        if history:
+            print(history)
+
     sent = dispatch(picks, next_draw, args.strategy, not args.no_telegram,
-                    config_path=args.telegram_config)
+                    config_path=args.telegram_config,
+                    draw_date=draw_date, history=history)
 
     elapsed = (datetime.now() - started).total_seconds()
     print(f"\n{'=' * 60}")

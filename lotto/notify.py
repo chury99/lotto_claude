@@ -116,13 +116,20 @@ def format_message(
     draw_no: int,
     strategy: str,
     note: str | None = None,
+    draw_date: str | None = None,
+    history: str | None = None,
 ) -> str:
     """추천 조합을 텔레그램 HTML 메시지로 만든다.
 
+    draw_date: 추첨일 표기 (예: '2026-07-25 (토)')
+    history:   이 전략의 과거 시뮬레이션 당첨 이력 한 줄
+
     사용자 입력이 섞일 수 있는 값은 모두 이스케이프한다.
     """
-    lines = [
-        f"🎱 <b>{draw_no}회 추천 번호</b>",
+    lines = [f"🎱 <b>{draw_no}회 추천 번호</b>"]
+    if draw_date:
+        lines.append(f"추첨일: {html.escape(draw_date)}")
+    lines += [
         f"전략: <code>{html.escape(strategy)}</code> · {len(picks)}게임",
         "",
     ]
@@ -130,14 +137,12 @@ def format_message(
         numbers = " ".join(f"{n:02d}" for n in sorted(combo))
         lines.append(f"<b>{chr(64 + i)}</b>  <code>{numbers}</code>  (합 {sum(combo)})")
 
+    if history:
+        lines += ["", f"📊 <b>이 전략 과거 시뮬레이션</b>", html.escape(history)]
+
     if note:
         lines += ["", html.escape(note)]
 
-    lines += [
-        "",
-        "<i>로또는 매 회차 독립적인 무작위 추첨입니다. "
-        "이 번호가 당첨 확률을 높여주지 않습니다.</i>",
-    ]
     return "\n".join(lines)
 
 

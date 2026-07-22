@@ -56,6 +56,7 @@ python main.py backtest -d 200     # 최근 200회차로 전략 성능 검증
 | `predict` | `--show-scores` | 번호별 점수와 근거 지표 표 출력 |
 | `predict` | `--no-filter` | 조합 필터 비활성화 |
 | `predict` | `--telegram` | 추천 번호를 텔레그램으로 전송 |
+| `run.py` | `--no-history` | 과거 당첨 시뮬레이션 생략 (약 8초 단축) |
 | `backtest` | `-s, --strategy` | 특정 전략만 검증 (생략 시 전체 비교) |
 | `backtest` | `-d, --draws` | 검증할 최근 회차 수 (기본 100) |
 
@@ -250,6 +251,9 @@ python setup_telegram.py --check   # 저장된 설정으로 연결 확인
 
 ### 3. 실행
 
+전송되는 메시지에는 추첨일, 추천 조합, 그리고 **이 전략을 과거 전 회차에 적용했을 때의
+등수별 당첨 횟수**(워크포워드 시뮬레이션 결과이며 실제 구매 이력이 아닙니다)가 포함됩니다.
+
 ```bash
 python run.py                                  # 전 과정 실행 후 발송
 python main.py predict -s unpopular --telegram # 추천만 하고 발송
@@ -295,7 +299,7 @@ pip install pytest
 python -m pytest tests -q
 ```
 
-파싱·분석·예측 로직을 네트워크 없이 고정 데이터로 검증합니다 (128개 테스트).
+파싱·분석·예측 로직을 네트워크 없이 고정 데이터로 검증합니다 (149개 테스트).
 LSTM 테스트는 torch가 설치된 환경에서만 실행되고, 없으면 자동으로 건너뜁니다.
 
 ## 프로젝트 구조
