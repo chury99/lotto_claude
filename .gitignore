@@ -1,0 +1,19 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+
+.idea/
+.vscode/
+.DS_Store
+.claude/settings.local.json
+
+.pytest_cache/
+.coverage
+
+# 크롤링 결과 캐시 (재수집 가능하므로 커밋하지 않음)
+data/*.csv
+data/*.html
+!data/.gitkeep
