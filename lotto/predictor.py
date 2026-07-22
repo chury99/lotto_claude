@@ -111,6 +111,17 @@ def balanced_scores(df: pd.DataFrame) -> pd.Series:
     return _normalize(total)
 
 
+@register("lstm")
+def lstm_strategy(df: pd.DataFrame) -> pd.Series:
+    """LSTM 시계열 모델이 예측한 번호별 포함 확률을 가중치로 쓴다.
+
+    torch가 필요하다(선택 설치): pip install -r requirements-lstm.txt
+    무거운 의존성이라 실제 사용 시점에 지연 임포트한다.
+    """
+    from . import lstm
+    return lstm.number_weights(df)
+
+
 # --------------------------------------------------- CLT(중심극한정리) 전략
 #
 # 1~45 모집단의 평균 μ=23, 분산 σ²=(45²-1)/12 ≈ 168.67.

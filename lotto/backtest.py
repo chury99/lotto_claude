@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 import numpy as np
@@ -14,6 +15,8 @@ import pandas as pd
 
 from . import predictor
 from .analyzer import NUMBER_COLUMNS
+
+log = logging.getLogger(__name__)
 
 # 맞춘 개수 -> 등수 (보너스 번호는 단순화를 위해 무시)
 RANK_BY_MATCH = {6: "1등", 5: "3등", 4: "4등", 3: "5등"}
@@ -99,7 +102,11 @@ def compare(
     strategies = strategies or predictor.available_strategies()
     rows = []
     for name in strategies:
-        result = run(df, strategy=name, **kwargs)
+        try:
+            result = run(df, strategy=name, **kwargs)
+        except ImportError as exc:  # 선택 의존성(torch 등) 미설치 전략은 건너뜀
+            log.warning("전략 %s 건너뜀: %s", name, exc)
+            continue
         rows.append({
             "전략": name,
             "평균적중": round(result.mean_matches, 4),
