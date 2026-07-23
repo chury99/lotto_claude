@@ -102,3 +102,85 @@ def test_predict_probabilities_subset(df):
     assert probs.shape == (1035,)
     assert ((probs >= 0) & (probs <= 1)).all()
     assert probs[3:].sum() == 0  # 학습하지 않은 열은 0
+
+
+# ------------------------------------------------------------------ 전략 등록
+
+@pytest.fixture(autouse=True)
+def fresh_cache():
+    la.clear_cache()
+    yield
+    la.clear_cache()
+
+
+@pytest.fixture
+def fast_probs(monkeypatch):
+    """1,035개 모델 학습은 회차당 2분대라, 테스트에서는 확률을 가짜로 준다.
+
+    호출마다 같은 값을 돌려줘야 재현성 검증이 성립한다.
+    """
+    fixed = np.random.default_rng(0).random(1035)
+    calls = []
+
+    def fake(history, **kwargs):
+        calls.append(int(history["draw_no"].max()))
+        return fixed.copy()
+
+    monkeypatch.setattr(la, "predict_probabilities", fake)
+    return calls
+
+
+def test_randomforest_registered():
+    from lotto import predictor
+    assert "randomforest" in predictor.available_strategies()
+
+
+def test_randomforest_predict(df, fast_probs):
+    from lotto import predictor
+    picks = predictor.predict(df, strategy="randomforest", games=5, seed=1)
+    assert len(picks) == 5
+    for combo in picks:
+        assert len(set(combo)) == 6
+        assert all(1 <= n <= 45 for n in combo)
+        assert combo == sorted(combo)
+
+
+def test_randomforest_reproduces_original_sets(df, fast_probs):
+    """필터를 끄면 원본 '따라가기' 5세트와 정확히 같아야 한다."""
+    from lotto import predictor
+    la.clear_cache()
+    probs = la.cached_probabilities(df)
+    expected = la.follow_the_pairs(probs, n_sets=5)
+
+    la.clear_cache()
+    fast_probs.clear()
+    picks = predictor.predict(df, strategy="randomforest", games=5,
+                              seed=1, use_filter=False)
+    assert picks == expected
+
+
+def test_randomforest_more_games_than_pool(df, fast_probs):
+    """풀(45개)보다 많이 요청해도 무한 루프 없이 끝난다."""
+    from lotto import predictor
+    picks = predictor.predict(df, strategy="randomforest", games=50, seed=2)
+    assert len(picks) == 50
+    assert len({tuple(c) for c in picks}) == 50
+
+
+def test_cached_probabilities_reuses(df, fast_probs):
+    la.cached_probabilities(df)
+    la.cached_probabilities(df)
+    assert len(fast_probs) == 1                    # 같은 시점 -> 재학습 없음
+
+    la.cached_probabilities(df.head(60))           # 과거 시점 -> 누출 방지 재학습
+    assert len(fast_probs) == 2
+
+    la.cached_probabilities(df.head(100))          # 60 + RETRAIN_EVERY(50) 이내 -> 재사용
+    assert len(fast_probs) == 2
+
+
+def test_cache_guards_against_leakage(df, fast_probs):
+    """미래 데이터로 학습된 캐시는 반드시 폐기된다."""
+    la.cached_probabilities(df)                    # 120회차까지 학습
+    la.cached_probabilities(df.head(80))           # 80회차 시점 예측 요청
+    assert fast_probs == [120, 80]

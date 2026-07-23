@@ -150,8 +150,9 @@ def prize_comparison(
     계산한다. 당첨 확률은 모든 조합이 동일하므로 이 표의 차이는 순수하게
     '남들과 얼마나 겹치는가'의 차이다.
     """
-    from . import predictor  # 순환 임포트 방지
+    from . import backtest as bt, predictor  # 순환 임포트 방지
 
+    strategies = [s for s in strategies if s not in bt.SLOW_STRATEGIES] or strategies
     model = fit(df)
     tail = df.dropna(subset=["first_prize_winners", "first_prize_amount", "total_sales"]).tail(recent)
     sales = float(tail["total_sales"].mean())

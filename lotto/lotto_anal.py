@@ -151,3 +151,35 @@ def predict_next(
     """원본 파이프라인 그대로: 확률 예측 → 따라가기 선정."""
     probs = predict_probabilities(history, **kwargs)
     return follow_the_pairs(probs, n_sets=n_sets), probs
+
+
+# ------------------------------------------------------------------ 캐시
+
+# 1,035개 모델 학습에 회차당 2분 이상 걸리므로, 백테스트에서 매 회차 다시
+# 학습하면 현실적으로 끝나지 않는다. lstm과 같은 방식으로 일정 회차마다만
+# 재학습하고, 캐시가 현재 시점보다 미래의 데이터로 만들어졌으면 강제 재계산한다.
+RETRAIN_EVERY = 50
+
+_cache: tuple[int, np.ndarray] | None = None  # (학습에 쓴 마지막 회차, 확률)
+
+
+def clear_cache() -> None:
+    global _cache
+    _cache = None
+
+
+def cached_probabilities(history: pd.DataFrame, **kwargs) -> np.ndarray:
+    """필요할 때만 재학습하고 1,035개 확률을 돌려준다."""
+    global _cache
+    max_draw = int(history["draw_no"].max())
+
+    stale = (
+        _cache is None
+        or _cache[0] > max_draw                     # 미래 데이터로 학습된 캐시 -> 누출 방지
+        or max_draw - _cache[0] >= RETRAIN_EVERY
+    )
+    if stale:
+        log.info("RandomForest 1,035개 학습 시작 (%d회차까지) — 수 분 걸립니다…", max_draw)
+        _cache = (max_draw, predict_probabilities(history, **kwargs))
+        log.info("RandomForest 학습 완료.")
+    return _cache[1]

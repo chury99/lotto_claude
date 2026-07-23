@@ -99,7 +99,15 @@ def test_summary_keys(df):
     assert "합계_통계" in s and "구간별_비율" in s
 
 
-@pytest.mark.parametrize("strategy", predictor.available_strategies())
+# randomforest는 1,035개 모델을 실제로 학습해 회차당 2분 이상 걸린다.
+# 전용 테스트(test_lotto_anal.py)가 확률을 모의해 따로 검증한다.
+SLOW_IN_TESTS = {"randomforest"}
+
+
+@pytest.mark.parametrize(
+    "strategy",
+    [s for s in predictor.available_strategies() if s not in SLOW_IN_TESTS],
+)
 def test_predict_shape(df, strategy):
     picks = predictor.predict(df, strategy=strategy, games=5, seed=1)
     assert len(picks) == 5

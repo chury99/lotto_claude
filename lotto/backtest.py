@@ -18,6 +18,10 @@ from .analyzer import NUMBER_COLUMNS
 
 log = logging.getLogger(__name__)
 
+# 회차마다 모델을 새로 학습해 전체 비교에 몇 시간이 걸리는 전략.
+# compare()는 기본적으로 제외하고, 이름을 명시적으로 넘길 때만 포함한다.
+SLOW_STRATEGIES = {"randomforest"}
+
 # 맞춘 개수 -> 등수 (보너스 번호는 단순화를 위해 무시)
 RANK_BY_MATCH = {6: "1등", 5: "3등", 4: "4등", 3: "5등"}
 
@@ -178,7 +182,12 @@ def compare(
     **kwargs,
 ) -> pd.DataFrame:
     """여러 전략을 같은 조건에서 비교한다."""
-    strategies = strategies or predictor.available_strategies()
+    if strategies is None:
+        strategies = [s for s in predictor.available_strategies()
+                      if s not in SLOW_STRATEGIES]
+        skipped = sorted(SLOW_STRATEGIES & set(predictor.available_strategies()))
+        if skipped:
+            log.info("느린 전략은 제외했습니다(필요하면 -s로 지정): %s", ", ".join(skipped))
     rows = []
     for name in strategies:
         try:

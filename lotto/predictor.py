@@ -264,6 +264,52 @@ def pairwise_sampler(df: pd.DataFrame) -> Sampler:
     return sample
 
 
+# --------------------------------------------------- randomforest (lotto-anal)
+#
+# 이전 프로젝트 lotto-anal(2023)의 로직. 45개 단일번호와 990개 2개조합 각각에
+# RandomForest를 학습해 다음 회차 출현 확률을 예측하고, '따라가기'로 조합을
+# 만든다(자세한 구조와 검증 결과는 lotto/lotto_anal.py 와 README 참고).
+#
+# 조합 생성이 확률 가중 추출이 아니라 결정적 체인이므로 커스텀 샘플러로 붙인다.
+# 원본과 완전히 동일한 5세트를 얻으려면 조합 필터를 꺼야 한다:
+#     predictor.predict(df, strategy="randomforest", games=5, use_filter=False)
+# 필터를 켜면 합계가 극단적인 세트가 걸러지고 그다음 후보로 대체된다.
+
+RANDOMFOREST_POOL = 45  # 따라가기 시작점을 45개 번호 전체로 확장한 후보 풀
+
+
+@register("randomforest")
+def randomforest_scores(df: pd.DataFrame) -> pd.Series:
+    """단일번호 45개에 대한 RandomForest 예측 확률 (score_table·폴백용).
+
+    scikit-learn이 필요하다: pip install -r requirements.txt
+    """
+    from . import lotto_anal
+    probs = lotto_anal.cached_probabilities(df)
+    return _normalize(pd.Series(probs[:45], index=NUMBERS))
+
+
+@register_sampler("randomforest")
+def randomforest_sampler(df: pd.DataFrame) -> Sampler:
+    from . import lotto_anal
+
+    probs = lotto_anal.cached_probabilities(df)
+    pool = lotto_anal.follow_the_pairs(probs, n_sets=RANDOMFOREST_POOL)
+    weights = _normalize(pd.Series(probs[:45], index=NUMBERS))
+    position = 0
+
+    def sample(rng: np.random.Generator) -> list[int]:
+        """후보 풀을 순서대로 내주고, 풀이 떨어지면 확률 가중 추출로 넘어간다."""
+        nonlocal position
+        if position < len(pool):
+            combo = pool[position]
+            position += 1
+            return combo
+        return draw_combination(weights, rng)
+
+    return sample
+
+
 @register("lstm")
 def lstm_strategy(df: pd.DataFrame) -> pd.Series:
     """LSTM 시계열 모델이 예측한 번호별 포함 확률을 가중치로 쓴다.

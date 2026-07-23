@@ -104,6 +104,7 @@ python main.py backtest -d 200     # 최근 200회차로 전략 성능 검증
 | `lstm` | LSTM 시계열 모델이 과거 32회차 흐름에서 다음 회차를 예측한다 (torch 필요) |
 | `pairwise` | 2개 조합 확률 — 이미 뽑은 번호와 자주 함께 나온 번호를 이어서 뽑는다 |
 | `unpopular` | 남들이 안 사는 조합 — 당첨 확률이 아니라 당첨 시 기대 상금을 높인다 |
+| `randomforest` | lotto-anal(2023) 로직 — RandomForest 예측 + '따라가기' 선정 (느림) |
 | `oracle` | ⚠️ 부정 행위 시연 — 미래 정보 누출이 백테스트를 어떻게 속이는지 보여준다 |
 
 ### `clt` 전략의 이론
@@ -236,7 +237,17 @@ pairwise가 학습하는 "함께 나온 빈도"는 전부 표본 잡음입니다
 ## 외부 로직 검증 — `lotto-anal` (RandomForest)
 
 이전 프로젝트 [lotto-anal](https://github.com/chury99/lotto-anal)(2023)의 로직을
-`lotto/lotto_anal.py`에 그대로 재현해 검증했습니다.
+`lotto/lotto_anal.py`에 그대로 재현하고, `randomforest` 전략으로 등록했습니다.
+
+```bash
+python main.py predict -s randomforest -n 5 --no-filter   # 원본과 동일한 5세트
+python run.py -s randomforest --no-history
+```
+
+예측 1회에 약 2분 24초가 걸리므로, `backtest`/`prize`를 전략 지정 없이 실행할 때는
+자동으로 제외됩니다(`-s randomforest`로 명시하면 포함). 원본의 '따라가기' 5세트를
+그대로 재현하려면 `--no-filter`를 주세요 — 조합 필터를 켜면 합계가 극단적인 세트가
+걸러지고 다음 후보로 대체됩니다.
 
 **구조**: 과거 10회차의 출현 여부를 one-hot으로 펴서 특징(45단일 + 990조합 = 1,035개
 × 10회차 = **10,350개**)을 만들고, 번호마다 별도의 RandomForest(150그루, 깊이 20)를
@@ -358,7 +369,7 @@ pip install pytest
 python -m pytest tests -q
 ```
 
-파싱·분석·예측 로직을 네트워크 없이 고정 데이터로 검증합니다 (165개 테스트).
+파싱·분석·예측 로직을 네트워크 없이 고정 데이터로 검증합니다 (171개 테스트).
 LSTM 테스트는 torch가 설치된 환경에서만 실행되고, 없으면 자동으로 건너뜁니다.
 
 ## 프로젝트 구조
