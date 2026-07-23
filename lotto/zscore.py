@@ -86,16 +86,73 @@ def _popularity_etas(df: pd.DataFrame) -> pd.Series:
         return pd.Series(-np.arange(1, 46, dtype=float), index=NUMBERS)
 
 
+def _candidates_at(chosen, mask, membership, winning, n_draws):
+    """다음 단계의 후보 목록과 각 후보의 z를 돌려준다."""
+    k = len(chosen) + 1
+    candidates = [n for n in NUMBERS if n not in chosen]
+
+    # 마지막 번호는 과거 당첨 조합을 만들지 않는 후보만 허용
+    if k == 6:
+        allowed = [n for n in candidates
+                   if tuple(sorted(chosen + [n])) not in winning]
+        if allowed:
+            candidates = allowed
+        else:  # 이론상 도달 불가 — 전부 막히면 원래 후보를 쓴다
+            log.warning("모든 후보가 과거 당첨 조합이라 제외 규칙을 적용하지 못했습니다.")
+
+    counts = np.array([np.count_nonzero(mask & membership[:, n - 1])
+                       for n in candidates], dtype=float)
+    return candidates, counts, deviation_scores(counts, n_draws, k)
+
+
+def _tied_candidates(candidates, z, etas) -> list[int]:
+    """z 최솟값이 같은 후보들을 인기도가 낮은(덜 고르는) 순으로 돌려준다."""
+    bottom = round(float(np.min(z)), 12)
+    tied = [c for c, zi in zip(candidates, z) if round(float(zi), 12) == bottom]
+    return sorted(tied, key=lambda n: etas.loc[n])
+
+
 def select_combo(
     df: pd.DataFrame,
-    start: int | None = None,
+    fixed: list[int] | None = None,
     membership: np.ndarray | None = None,
     etas: pd.Series | None = None,
     winning: set[tuple[int, ...]] | None = None,
 ) -> list[int]:
     """기대보다 가장 적게 나온(z가 가장 작은) 방향으로 6개를 그리디로 고른다.
 
-    start를 주면 그 번호에서 출발한다(여러 세트를 만들 때 사용).
+    fixed를 주면 그 번호들을 이미 고른 것으로 보고 이어서 채운다.
+    """
+    membership = membership_matrix(df) if membership is None else membership
+    etas = _popularity_etas(df) if etas is None else etas
+    winning = _winning_combos(df) if winning is None else winning
+    n_draws = len(membership)
+
+    chosen: list[int] = list(fixed or [])
+    mask = np.ones(n_draws, dtype=bool)  # 이미 고른 번호를 모두 포함하는 회차
+    for n in chosen:
+        mask = mask & membership[:, n - 1]
+
+    while len(chosen) < 6:
+        candidates, _, z = _candidates_at(chosen, mask, membership, winning, n_draws)
+        # z 최소(가장 덜 나온 쪽) → 동률이면 인기도가 낮은(덜 고르는) 번호
+        pick = _tied_candidates(candidates, z, etas)[0]
+        chosen.append(pick)
+        mask = mask & membership[:, pick - 1]
+
+    return sorted(chosen)
+
+
+def fixed_prefix(
+    df: pd.DataFrame,
+    membership: np.ndarray | None = None,
+    etas: pd.Series | None = None,
+    winning: set[tuple[int, ...]] | None = None,
+) -> list[int]:
+    """이탈도가 단독으로 결정한(동률이 아닌) 번호들.
+
+    이 번호들은 근거가 명확하므로 모든 세트에 고정된다. 동률이 처음 생기는
+    단계에서 멈춘다.
     """
     membership = membership_matrix(df) if membership is None else membership
     etas = _popularity_etas(df) if etas is None else etas
@@ -103,66 +160,69 @@ def select_combo(
     n_draws = len(membership)
 
     chosen: list[int] = []
-    mask = np.ones(n_draws, dtype=bool)  # 이미 고른 번호를 모두 포함하는 회차
-
-    if start is not None:
-        chosen.append(start)
-        mask = membership[:, start - 1].copy()
-
+    mask = np.ones(n_draws, dtype=bool)
     while len(chosen) < 6:
-        k = len(chosen) + 1
-        candidates = [n for n in NUMBERS if n not in chosen]
-
-        # 마지막 번호는 과거 당첨 조합을 만들지 않는 후보만 허용
-        if k == 6:
-            allowed = [n for n in candidates
-                       if tuple(sorted(chosen + [n])) not in winning]
-            if allowed:
-                candidates = allowed
-            else:  # 이론상 도달 불가 — 전부 막히면 원래 후보를 쓴다
-                log.warning("모든 후보가 과거 당첨 조합이라 제외 규칙을 적용하지 못했습니다.")
-
-        counts = np.array([np.count_nonzero(mask & membership[:, n - 1])
-                           for n in candidates], dtype=float)
-        z = deviation_scores(counts, n_draws, k)
-
-        # z 최소(가장 덜 나온 쪽) → 동률이면 인기도가 낮은(덜 고르는) 번호
-        best = min(
-            range(len(candidates)),
-            key=lambda i: (round(z[i], 12), etas.loc[candidates[i]]),
-        )
-        pick = candidates[best]
-        chosen.append(pick)
-        mask = mask & membership[:, pick - 1]
-
-    return sorted(chosen)
-
-
-def start_order(df: pd.DataFrame, membership=None, etas=None) -> list[int]:
-    """1단계 이탈도가 작은(덜 나온) 순으로 정렬한 시작점 목록."""
-    membership = membership_matrix(df) if membership is None else membership
-    etas = _popularity_etas(df) if etas is None else etas
-    counts = membership.sum(axis=0).astype(float)
-    z = deviation_scores(counts, len(membership), k=1)
-    return sorted(NUMBERS, key=lambda n: (round(z[n - 1], 12), etas.loc[n]))
+        candidates, _, z = _candidates_at(chosen, mask, membership, winning, n_draws)
+        tied = _tied_candidates(candidates, z, etas)
+        if len(tied) > 1:      # 여기서부터는 이탈도가 결정하지 못한다
+            break
+        chosen.append(tied[0])
+        mask = mask & membership[:, tied[0] - 1]
+    return chosen
 
 
 def iter_sets(df: pd.DataFrame):
-    """시작점 순서대로 조합을 하나씩 만들어 내보낸다(필요한 만큼만 계산).
+    """이탈도로 확정된 번호는 고정하고, 동률 단계에서만 갈라져 조합을 만든다.
 
-    1단계 선택이 결정적이라 세트를 하나만 만들 수 있으므로, 여러 세트가 필요할 때는
-    z가 작은 순으로 시작점을 옮긴다(첫 세트는 원래 절차와 동일).
+    첫 세트는 원래 절차 그대로(동률마다 인기도 최저를 선택)다. 이후 세트는
+    동률 단계의 차순위 후보로 갈아 끼워 만든다 — 근거가 있는 번호는 버리지 않고
+    근거가 없는 자리만 바꾸는 것이다.
     """
     membership = membership_matrix(df)
     etas = _popularity_etas(df)
     winning = _winning_combos(df)
-    for start in start_order(df, membership, etas):
-        yield select_combo(df, start=start, membership=membership,
-                           etas=etas, winning=winning)
+    n_draws = len(membership)
+
+    prefix = fixed_prefix(df, membership, etas, winning)
+
+    def complete(base: list[int]) -> list[int]:
+        return select_combo(df, fixed=base, membership=membership,
+                            etas=etas, winning=winning)
+
+    seen: set[tuple[int, ...]] = set()
+
+    def emit(combo: list[int]):
+        key = tuple(combo)
+        if key not in seen:
+            seen.add(key)
+            return combo
+        return None
+
+    primary = complete(prefix)
+    first = emit(primary)
+    if first:
+        yield first
+
+    # 동률이 생긴 단계들을 순서대로 훑으며 차순위 후보로 분기한다
+    branch_base = list(prefix)
+    mask = np.ones(n_draws, dtype=bool)
+    for n in branch_base:
+        mask = mask & membership[:, n - 1]
+
+    while len(branch_base) < 6:
+        candidates, _, z = _candidates_at(branch_base, mask, membership,
+                                          winning, n_draws)
+        tied = _tied_candidates(candidates, z, etas)
+        for alt in tied[1:]:
+            combo = emit(complete(branch_base + [alt]))
+            if combo:
+                yield combo
+        branch_base.append(tied[0])
+        mask = mask & membership[:, tied[0] - 1]
 
 
 def select_sets(df: pd.DataFrame, n_sets: int = 5) -> list[list[int]]:
-    """가장 덜 나온 번호들을 각각 시작점으로 삼아 n_sets개 조합을 만든다."""
+    """이탈도 확정 번호를 공유하는 조합 n_sets개를 만든다."""
     out = []
     for combo in iter_sets(df):
         out.append(combo)
@@ -171,7 +231,7 @@ def select_sets(df: pd.DataFrame, n_sets: int = 5) -> list[list[int]]:
     return out
 
 
-def zscore_trace(df: pd.DataFrame, start: int | None = None) -> pd.DataFrame:
+def zscore_trace(df: pd.DataFrame, fixed: list[int] | None = None) -> pd.DataFrame:
     """단계별로 어떤 번호가 왜 뽑혔는지 기록한다(진단용).
 
     각 단계의 선택 번호, 그때의 관측 횟수·기대값·z, 그리고 최솟값이 동률이었는지.
@@ -181,11 +241,10 @@ def zscore_trace(df: pd.DataFrame, start: int | None = None) -> pd.DataFrame:
     winning = _winning_combos(df)
     n_draws = len(membership)
 
-    chosen: list[int] = []
+    chosen: list[int] = list(fixed or [])
     mask = np.ones(n_draws, dtype=bool)
-    if start is not None:
-        chosen.append(start)
-        mask = membership[:, start - 1].copy()
+    for n in chosen:
+        mask = mask & membership[:, n - 1]
 
     rows = []
     while len(chosen) < 6:

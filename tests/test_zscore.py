@@ -157,6 +157,38 @@ def test_select_sets_distinct(df):
     assert len({tuple(s) for s in sets}) == 5
 
 
+def test_fixed_prefix_is_deviation_determined(df):
+    """고정 번호는 동률 없이 이탈도만으로 결정된 번호들이다."""
+    prefix = zscore.fixed_prefix(df)
+    trace = zscore.zscore_trace(df)
+    determined = [int(r["선택"]) for _, r in trace.iterrows()
+                  if r["동률후보수"] == 1]
+    # 앞에서부터 연속으로 단독 결정된 구간이 곧 고정 접두다
+    assert prefix == determined[:len(prefix)]
+    assert len(prefix) >= 1
+
+
+def test_all_sets_share_fixed_prefix(df):
+    """이탈도로 확정된 번호는 모든 세트에 들어가야 한다."""
+    prefix = set(zscore.fixed_prefix(df))
+    for combo in zscore.select_sets(df, n_sets=5):
+        assert prefix <= set(combo)
+
+
+def test_sets_differ_only_in_tied_positions(df):
+    """세트 간 차이는 동률 자리에서만 생긴다 (고정 번호는 그대로)."""
+    prefix = set(zscore.fixed_prefix(df))
+    sets = [set(c) for c in zscore.select_sets(df, n_sets=5)]
+    for combo in sets[1:]:
+        assert combo & prefix == prefix
+        assert combo != sets[0]
+
+
+def test_first_set_matches_plain_greedy(df):
+    """첫 세트는 원래 절차(매 단계 인기도 최저)와 같아야 한다."""
+    assert zscore.select_sets(df, n_sets=1)[0] == zscore.select_combo(df)
+
+
 # ------------------------------------------------------------------ 전략 등록
 
 def test_registered():
