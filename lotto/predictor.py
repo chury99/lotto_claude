@@ -264,6 +264,44 @@ def pairwise_sampler(df: pd.DataFrame) -> Sampler:
     return sample
 
 
+# --------------------------------------------------- zscore (정규분포 이탈도)
+#
+# "모든 현상은 정규분포한다"는 가정 아래, 관측 출현 횟수가 이론값에서 가장 크게
+# 벗어난 조합을 그리디로 고른다. 자세한 절차는 lotto/zscore.py 참고.
+# 선택이 결정적이라 커스텀 샘플러로 붙인다.
+
+ZSCORE_POOL = 45  # 시작점을 z가 작은 순 45개(전체)로 확장한 후보 풀
+
+
+@register("zscore")
+def zscore_scores(df: pd.DataFrame) -> pd.Series:
+    """번호별 가중치 (score_table·폴백용).
+
+    이탈 방향이 하향이므로 z가 작을수록(덜 나왔을수록) 큰 가중치를 준다.
+    """
+    from . import zscore
+    membership = zscore.membership_matrix(df)
+    counts = membership.sum(axis=0).astype(float)
+    z = zscore.deviation_scores(counts, len(membership), k=1)
+    return _normalize(pd.Series(z.max() - z, index=NUMBERS))
+
+
+@register_sampler("zscore")
+def zscore_sampler(df: pd.DataFrame) -> Sampler:
+    from . import zscore
+
+    # 요청한 만큼만 계산한다(45개를 미리 다 만들면 백테스트가 느려진다)
+    pool = zscore.iter_sets(df)
+    weights = zscore_scores(df)
+
+    def sample(rng: np.random.Generator) -> list[int]:
+        """덜 나온 순 후보를 내주고, 후보가 떨어지면 가중 추출로 넘어간다."""
+        combo = next(pool, None)
+        return combo if combo is not None else draw_combination(weights, rng)
+
+    return sample
+
+
 # --------------------------------------------------- randomforest (lotto-anal)
 #
 # 이전 프로젝트 lotto-anal(2023)의 로직. 45개 단일번호와 990개 2개조합 각각에
